@@ -23,8 +23,9 @@
 - **Source:** 국가법령정보센터(law.go.kr) API
 - **Format:** Hierarchical JSON (조 > 항 > 호 > 목 계층 구조 유지)
 - **Progress:** - [x] API 연동 및 고성능 배치 수집 엔진 구현
-  - [x] **대한민국 현행법령 전수 수집 완료 (약 5,000건+)**
+  - [x] 대한민국 현행법령 전수 수집 완료 (약 5,000건+)
   - [x] 개별 배치 파일(Batch 1-56) 통합 및 데이터 정제 완료
+  - [x] 최종 확보 데이터: 5,567건 (JSON)
   - [ ] Kaggle Dataset 업로드 및 공개 (예정)
 
 ## 🛠 Tech Stack

@@ -3,9 +3,13 @@ import xml.etree.ElementTree as ET
 import json
 import time
 import os
+from dotenv import load_dotenv
 
-# 태건님의 API 키
-API_KEY = "ltg3571128"
+# .env 파일에 기록된 정보를 읽어옵니다.
+load_dotenv()
+
+# 환경변수에서 키를 가져옵니다.
+API_KEY = os.getenv("LAW_API_KEY")
 
 def get_all_law_list():
     """1단계: 대한민국 모든 법령의 '이름'과 'ID' 목록을 가져옵니다."""

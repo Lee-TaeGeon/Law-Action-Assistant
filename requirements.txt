@@ -1,0 +1,15 @@
+# Core Frameworks
+langchain
+langchain-community
+langchain-huggingface
+langgraph
+langsmith
+
+# Vector DB & Embeddings
+chromadb
+sentence-transformers
+huggingface-hub
+
+# Utilities
+tqdm
+pandas

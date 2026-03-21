@@ -13,3 +13,9 @@ __pycache__/
 # 가상환경 (사용 중이라면)
 venv/
 .env/
+
+# Vector DB 저장 폴더 (용량이 매우 크고 코드가 아니므로 제외)
+law_db_full/
+
+# 중간 확인용 텍스트 파일 (아까 만드신 결과물)
+perfect_law_book.txt

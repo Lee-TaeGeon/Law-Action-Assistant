@@ -1,0 +1,15 @@
+# 데이터 파일 (Kaggle 업로드용이므로 GitHub에서는 제외)
+*.json
+*.csv
+*.xlsx
+
+# 파이썬 및 시스템 설정 파일
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.vscode/
+
+# 가상환경 (사용 중이라면)
+venv/
+.env/

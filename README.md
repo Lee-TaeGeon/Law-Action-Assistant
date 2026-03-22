@@ -1,7 +1,7 @@
 # ⚖️ Law-Action-Assistant: 상황 맞춤형 법률 AI 에이전트
 
 > **"법은 복잡하지만, 당신의 대처는 명확해야 합니다."**
-> 대한민국 현행법령 데이터를 정밀 구조화하고, **LangGraph**의 논리 추론과 **LangSmith**의 검증 파이프라인을 통해 사용자의 상황에 최적화된 **'실행 가능한 액션 플랜(Action Plan)'**을 제공하는 차세대 법률 지원 서비스입니다.
+> 대한민국 현행법령 데이터를 정밀 구조화하고, **LangChain**과 **Gemini**의 논리 추론을 통해 사용자의 상황에 최적화된 **'실행 가능한 액션 플랜(Action Plan)'**을 제공하는 차세대 법률 지원 서비스입니다.
 
 ---
 
@@ -19,10 +19,10 @@
 사용자가 상황을 입력하면, AI 에이전트가 다음과 같은 단계를 거쳐 종합 솔루션을 제공합니다.
 
 1. **🔍 고정밀 법령 매칭**: 조·항·호·목 단위로 정밀 구조화된 DB에서 관련 법령을 즉시 도출합니다.
-2. **🛡️ 연관 법률 종합 진단**: 사건의 이면에 숨겨진 민사적 책임과 형사적 책임을 동시에 분석합니다. (**LangGraph Loop** 활용)
+2. **🛡️ 연관 법률 종합 진단**: 사건의 이면에 숨겨진 민사적 책임과 형사적 책임을 동시에 분석합니다.
 3. **🎬 실행 가능한 액션 플랜**: 법적 대응을 위해 필요한 증거물 체크리스트와 대응 가이드를 생성합니다.
-4. **📑 실제 판례 사례 연결**: 유사한 실제 판례를 매칭하여 답변의 법적 신뢰성을 확보합니다.
-5. **📝 법률 문서 초안 자동 생성**: 고소장, 내용증명 등 필수 문서의 기초 드래프트를 작성합니다.
+4. **💬 연속 대화 문맥 유지 (Context-aware)**: 대화 기록을 관리하여 이전 상담 내용을 바탕으로 심층적인 후속 질문이 가능합니다.
+5. **📝 법률 문서 초안 자동 생성**: 고소장, 내용증명 등 필수 문서의 기초 드래프트를 작성합니다. (Planned)
 
 ## 📈 Data Engineering & RAG Pipeline (Status: Completed)
 대한민국 법령의 특수성을 고려하여 검색 정확도를 극대화하는 데이터 파이프라인을 구축했습니다.
@@ -32,8 +32,10 @@
   - 단순 텍스트 추출이 아닌 `조(Article) > 항(Paragraph) > 호(Item) > 목(Sub-item)` 위계질서 완벽 보존.
   - `└─[호]`, `└─[목]` 시각적 인덱싱을 도입하여 RAG 모델의 문맥 이해도 향상.
 - [x] **대용량 Vector DB 구축 (ChromaDB)**:
-  - 22만 개 조문을 1,000개 단위 배치 임베딩으로 처리하여 메모리 효율성 및 안정성 확보.
+  - 22만 개 조문을 배치 임베딩으로 처리하여 메모리 효율성 및 안정성 확보.
   - `ko-sroberta-multitask` 모델을 활용한 고성능 한국어 문장 임베딩 적용.
+- [x] **LLM 연동 및 세션 관리**:
+  - Google Gemini API를 활용한 자연어 답변 생성 및 대화 이력(History) 관리 로직 구현.
 
 ### 🔍 데이터 구조화 예시 (Data Structure Example)
 ```text
@@ -53,11 +55,10 @@
 | Category | Tools & Technologies |
 | :--- | :--- |
 | **Language** | Python 3.13 |
-| **Frameworks** | LangChain, LangGraph, LangSmith |
+| **LLM** | Google Gemini 1.5 / 2.0 Flash |
+| **Frameworks** | LangChain, LangGraph (Planned) |
 | **Vector DB** | ChromaDB (Persistent Local Storage) |
 | **Embedding** | `jhgan/ko-sroberta-multitask` (Sentence-Transformers) |
-| **Libraries** | langchain-huggingface, tqdm, json |
-| **Infrastructure** | Kaggle (GPU Embedding), Git, GitHub |
+| **Libraries** | google-generativeai, langchain-huggingface, python-dotenv |
+| **Data Source** | National Law Information Center (국가법령정보센터) |
 
----
-```

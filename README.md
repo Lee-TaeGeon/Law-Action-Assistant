@@ -8,7 +8,7 @@
 ---
 
 ## 🚀 Project Overview
-단순히 법조문을 나열하는 기존 RAG의 한계를 넘어, 본 프로젝트는 **Multi-Agent Workflow**를 통해 사용자의 질문을 스스로 분류하고 최적의 법령을 탐색합니다. 특히 보이스피싱, 교통사고와 같이 민·형사가 결합된 복합적인 시나리오에서 강력한 통합 액션 플랜을 제시합니다.
+단순히 법조문을 나열하는 기존 RAG의 한계를 넘어, 본 프로젝트는 **Multi-Agent Workflow**를 통해 사용자의 질문을 스스로 분류하고 최적의 법령을 탐색합니다. 특히 **Groq LPU 가속**을 도입하여 응답 속도를 혁신적으로 개선했으며, **스마트 라우팅**을 통해 불필요한 검색 비용을 절감했습니다.
 
 ## 📊 Dataset & Knowledge Base
 대한민국 법령정보센터로부터 직접 수집하고 정제한 고도화된 데이터셋을 기반으로 동작합니다.
@@ -20,39 +20,44 @@
 ## 🧠 Advanced Agentic Workflow (LangGraph)
 본 프로젝트의 핵심은 **LangGraph**를 이용한 지능형 추론 엔진입니다. 질문이 들어오면 AI는 고정된 답변을 내놓는 대신 아래와 같은 유동적인 사고 과정을 거칩니다.
 
-
----
-
 ### 🖼️ System Architecture
-현재 서비스의 핵심 로직은 아래와 같은 LangGraph 구조로 설계되었습니다.
+```mermaid
+graph TD
+    A[사용자 질문] --> B{Classifier}
+    B -- "신규 주제 (YES)" --> C[Researcher: Vector DB 검색]
+    B -- "주제 유지 (NO)" --> D[Generator: 맥락 기반 생성]
+    C --> D
+    D --> E[최종 법률 솔루션 제공]
+    
+    subgraph "Smart Optimization"
+    B
+    end
+    
+    subgraph "LLM Engine"
+    D -- "Llama 3.3 (via Groq)" --> D
+    end
+```
 
-<p align="center">
-  <img src="./law_graph_structure.png" width="300" alt="Law Graph Structure">
-  <br>
-  <em>[지능형 에이전트 워크플로우: 분류 - 검색 - 생성]</em>
-</p>
-
----
-
-1. **`Classifier` (의도 분석)**: 사용자의 질문이 '법률' 관련인지 '일상' 대화인지 판단하고, 관련 법률 분야(민사, 형사, 가사, 노동 등)를 멀티 레이블로 추출합니다.
-2. **`Researcher` (정밀 검색)**: 추출된 분야 키워드와 질문 내용을 결합하여 22만 건의 조문 중 가장 연관성이 높은 5개 이상의 법령을 교차 검색합니다.
-3. **`Generator` (솔루션 생성)**: 검색된 법적 근거를 바탕으로 `상황 분석 - 법적 근거 - 대응 방법`의 3단계 실행 계획을 생성합니다.
+1. **`Classifier` (의도 및 맥락 분석)**: 질문이 이전 대화의 연장선인지 판단하여 **불필요한 중복 검색을 차단**합니다.
+2. **`Researcher` (정밀 검색)**: 분석된 카테고리를 바탕으로 22만 건의 조문 중 최적의 법령 5개 이상을 교차 검색합니다.
+3. **`Generator` (솔루션 생성)**: **Groq 기반 Llama 3.3 70B** 모델을 활용해 `상황 분석 - 법적 근거 - 대응 방법`의 3단계 계획을 초고속으로 생성합니다.
 
 ## ✨ Key Features
-- **🛡️ 복합 법률 진단**: "돈을 안 갚고 잠적했다"는 질문에 대해 사기죄(형사)와 대여금 반환(민사)을 동시에 분석합니다.
-- **🔍 고정밀 법령 매칭**: 단순 검색이 아닌, AI가 판단한 카테고리를 검색 쿼리에 포함하여 검색 정확도를 극대화했습니다.
-- **🚀 실시간 프로세스 시각화**: Streamlit UI에서 AI가 현재 어떤 단계(분류/검색/생성)를 수행 중인지 실시간 상태를 제공합니다.
-- **📊 LangSmith 연동**: 모든 에이전트의 사고 과정과 토큰 사용량, 응답 속도를 LangSmith를 통해 정밀 트레이싱합니다.
+- **⚡ 초고속 추론**: Groq API를 연동하여 기존 대비 **약 10배 빠른 응답 속도** 구현.
+- **🧠 스마트 라우팅**: 대화 흐름을 인지하여 불필요한 Vector DB 호출을 방지하고 비용 최적화.
+- **🛡️ 복합 법률 진단**: 보이스피싱, 교통사고 등 민·형사가 결합된 복잡한 시나리오 통합 분석.
+- **📊 실시간 트레이싱**: LangSmith를 연동하여 에이전트의 모든 사고 과정을 정밀 모니터링.
 
 ## 🛠 Tech Stack
 
 | Category | Tools & Technologies |
 | :--- | :--- |
 | **Language** | Python 3.13 |
-| **LLM** | Google Gemini 2.5 Flash |
+| **LLM Inference** | **Groq Cloud** (LPU Acceleration) |
+| **Main Model** | **Llama-3.3-70b-versatile** |
 | **Agent Framework** | **LangGraph**, LangChain |
 | **Vector DB** | ChromaDB (Persistent Local Storage) |
-| **Embedding** | `jhgan/ko-sroberta-multitask` (Sentence-Transformers) |
+| **Embedding** | `jhgan/ko-sroberta-multitask` |
 | **Monitoring** | **LangSmith** (Tracing & Evaluation) |
 | **UI Framework** | Streamlit |
 
@@ -78,7 +83,4 @@
 본 서비스는 법률 전문가의 자문을 대체할 수 없으며, 제공되는 답변은 대한민국 법령 데이터를 기반으로 한 참고용 정보입니다. 실제 법적 대응 시에는 반드시 변호사 등 전문가와 상의하시기 바랍니다.
 
 ---
-
-
-
 

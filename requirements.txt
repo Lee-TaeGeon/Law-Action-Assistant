@@ -5,6 +5,10 @@ langchain-huggingface
 langgraph
 langsmith
 
+# LLM & API
+google-generativeai
+python-dotenv
+
 # Vector DB & Embeddings
 chromadb
 sentence-transformers
@@ -13,3 +17,4 @@ huggingface-hub
 # Utilities
 tqdm
 pandas
+pydantic

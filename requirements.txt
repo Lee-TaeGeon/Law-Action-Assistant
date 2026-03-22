@@ -1,3 +1,6 @@
+# Web Framework
+streamlit
+
 # Core Frameworks
 langchain
 langchain-community
@@ -5,7 +8,8 @@ langchain-huggingface
 langgraph
 langsmith
 
-# LLM & API
+# LLM & API (중요: 커넥터 추가)
+langchain-google-genai
 google-generativeai
 python-dotenv
 

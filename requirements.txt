@@ -8,15 +8,16 @@ langchain-huggingface
 langgraph
 langsmith
 
-# LLM & API (중요: 커넥터 추가)
-langchain-google-genai
-google-generativeai
+# LLM & API (현재 사용 중인 Groq 추가)
+langchain-groq
 python-dotenv
 
-# Vector DB & Embeddings
+# Vector DB & Embeddings (버전 충돌 방지를 위해 pysqlite3-binary 추가 권장)
 chromadb
 sentence-transformers
 huggingface-hub
+# Streamlit Cloud에서 ChromaDB 사용 시 필수인 경우가 많습니다
+pysqlite3-binary
 
 # Utilities
 tqdm

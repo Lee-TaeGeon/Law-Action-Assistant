@@ -6,45 +6,79 @@ from dotenv import load_dotenv
 # LangChain & LangGraph 라이브러리
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver 
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_groq import ChatGroq  
+from langchain_groq import ChatGroq 
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 
-# 1. 페이지 설정
+# 1. 페이지 설정 및 디자인 (Custom CSS)
 st.set_page_config(
     page_title="Law-Action-Assistant", 
     page_icon="⚖️", 
     layout="wide"
 )
 
+# 전문적인 느낌을 위한 스타일링 적용
+# 전문적인 느낌을 위한 스타일링 적용 (글자색 보정 포함)
+st.markdown("""
+    <style>
+    /* 메인 앱 배경 */
+    .stApp { background-color: #f8f9fa; }
+    
+    /* 사이드바 배경색 고정 */
+    section[data-testid="stSidebar"] { 
+        background-color: #1e293b !important; 
+    }
+    
+    /* 1. 사이드바 제목(st.title) 색상 변경 */
+    section[data-testid="stSidebar"] h1 { 
+        color: #ffffff !important; 
+        font-weight: 700 !important;
+        text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+    }
+
+    /* 2. 사이드바 라디오 버튼(메뉴) 글자색 및 크기 */
+    div[data-testid="stRadio"] label p {
+        color: #f1f5f9 !important;
+        font-size: 17px !important;
+        font-weight: 500 !important;
+    }
+
+    /* 3. 사이드바 내 모든 일반 텍스트 및 캡션 */
+    section[data-testid="stSidebar"] .stMarkdown, 
+    section[data-testid="stSidebar"] p, 
+    section[data-testid="stSidebar"] span { 
+        color: #cbd5e1 !important; 
+    }
+
+    /* 채팅 메시지 및 기타 디자인 */
+    .stChatMessage { border-radius: 15px; padding: 15px; margin-bottom: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .stStatus { border: 1px solid #e2e8f0; border-radius: 10px; background-color: white; }
+    .stButton>button { width: 100%; border-radius: 8px; background-color: #3b82f6; color: white; transition: all 0.3s; }
+    .stButton>button:hover { background-color: #2563eb; transform: translateY(-1px); }
+    </style>
+    """, unsafe_allow_html=True)
+
 # 2. 환경 변수 로드 및 LangSmith 설정
 load_dotenv()
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
-os.environ["LANGCHAIN_PROJECT"] = "Law-Action-Assistant-Final-Fix" 
+os.environ["LANGCHAIN_PROJECT"] = "Law-Action-Assistant-Final-v1.2" 
 
 # 3. 모델 및 DB 로드 (캐싱)
 @st.cache_resource
 def init_models():
-    # 2. Gemini 대신 Groq 모델로 선언
+    # Groq Llama 3.3 모델 (초고속 추론 엔진)
     llm = ChatGroq(
-        model="llama-3.3-70b-versatile", # 혹은 "llama3-8b-8192" (더 빠름)
+        model="llama-3.3-70b-versatile",
         groq_api_key=os.getenv("GROQ_API_KEY"),
         temperature=0.1
     )
-    # # 2.5-flash 대신 가장 안정적인 1.5-flash 사용 권장 (쿼터 이슈 방지)
-    # llm = ChatGoogleGenerativeAI(
-    #     model="gemini-2.5-flash", 
-    #     google_api_key=os.getenv("GEMINI_API_KEY"),
-    #     temperature=0.1
-    # )
-    
+    # 한국어 특화 임베딩
     embeddings = HuggingFaceEmbeddings(
         model_name="jhgan/ko-sroberta-multitask",
         model_kwargs={'device': 'cpu'},
         encode_kwargs={'normalize_embeddings': True}
     )
-    
+    # 법령 Vector DB 로드 (경로 주의)
     db = Chroma(persist_directory="./law_db_full", embedding_function=embeddings)
     return llm, db
 
@@ -61,174 +95,126 @@ class AgentState(TypedDict):
     history_category: str    
 
 def classifier_node(state: AgentState):
-    print("--- [노드: 분류기] 문맥 파악 및 검색 필요성 정밀 판단 중... ---")
     last_topic = state.get("history_category", "없음")
-    
-    prompt = f"""
-    당신은 법률 상담 효율화 전문가입니다.
-    현재 질문이 이전 대화의 주제인 [{last_topic}]의 연장선상에 있는지 판단하세요.
-
-    [이전 주제]: {last_topic}
-    [현재 질문]: {state['question']}
-
-    판단 기준:
-    1. 분야: 질문의 법률 분야(민사, 형사 등)를 적으세요.
-    2. 검색필요 (YES/NO): 
-       - 만약 질문이 [{last_topic}]과 관련된 '합의금', '처벌', '절차' 등에 대한 것이라면 무조건 'NO'라고 하세요.
-       - 주제가 완전히 바뀌거나 첫 질문일 때만 'YES'라고 하세요.
-    
-    답변 형식:
-    분야: [분야명]
-    검색필요: [YES/NO]
-    """
+    prompt = f"""당신은 법률 상담 전문가입니다. 질문이 [{last_topic}] 연관 질문인지 판단하세요.
+    [이전 주제]: {last_topic} | [현재 질문]: {state['question']}
+    형식: 분야: [분야] / 검색필요: [YES/NO]"""
     
     response = llm.invoke(prompt).content
-    print(f"--- [분류기 AI 응답]:\n{response}\n------------------")
-
-    category = "법률"
-    need_search = True
-    
+    category, need_search = "법률", True
     for line in response.split('\n'):
-        if "분야:" in line:
-            category = line.split("분야:")[1].strip()
-        if "검색필요:" in line:
-            if "NO" in line.upper():
-                need_search = False
+        if "분야:" in line: category = line.split("분야:")[1].strip()
+        if "검색필요:" in line and "NO" in line.upper(): need_search = False
 
-    # [수정된 핵심 로직] 
-    # 이전 주제가 '교통사고'인데 현재가 '민사'나 '형사'로 나와도 
-    # 맥락상 같은 사건이면 검색을 강제로 막습니다.
     relevant_keywords = ["합의", "금", "보험", "처벌", "사고", "과실"]
-    is_related = any(kw in state['question'] for kw in relevant_keywords)
-
-    if last_topic != "없음" and (last_topic in category or is_related):
-        print(f"!!! 맥락 유지 확인 ({last_topic} -> {category}): 검색 강제 차단 !!!")
+    if last_topic != "없음" and (last_topic in category or any(kw in state['question'] for kw in relevant_keywords)):
         need_search = False
         
-    return {
-        "category": category, 
-        "need_search": need_search, 
-        "history_category": category if need_search else last_topic # 검색 안 할 땐 주제 유지
-    }
+    return {"category": category, "need_search": need_search, "history_category": category if need_search else last_topic}
 
 def legal_researcher_node(state: AgentState):
-    """새로운 법령 검색이 필요한 경우에만 실행"""
     query = f"{state['category']} 관련 법령 {state['question']}"
-    print(f"--- [노드: 리서처] 분야({state['category']}) 기반 신규 검색 중... ---")
-    
     retriever = db.as_retriever(search_kwargs={"k": 5})
     docs = retriever.invoke(query)
-    context = [d.page_content for d in docs]
-    return {"context": context}
+    return {"context": [d.page_content for d in docs]}
 
 def answer_generator_node(state: AgentState):
-    """최종 통합 답변 생성 (가이드라인을 강화하여 답변 분량 확보)"""
-    print("--- [노드: 생성기] 답변 작성 중... ---")
     category = state.get("category", "법률")
-    context_list = state.get("context", [])
-    
-    # 문맥이 없어도 이전 대화 내용을 최대한 활용하도록 지시
-    if not context_list:
-        context_text = "제공된 새로운 법령 데이터는 없으나, 이전 대화에서 언급된 법적 사실과 일반적인 법률 지식을 바탕으로 상세히 답변하세요."
-    else:
-        context_text = "\n\n".join(context_list)
-    
-    system_instruction = f"""
-    당신은 대한민국의 유능하고 친절한 법률 전문가입니다. 사용자의 질문에 대해 신뢰감을 줄 수 있도록 상세하고 깊이 있게 답변하세요.
-    
-    [답변 지침]:
-    1. 분야({category})에 맞는 전문 용어를 적절히 섞어 신뢰도를 높이세요.
-    2. 이전 대화 맥락이 있다면 이를 반드시 언급하며 답변의 연속성을 유지하세요.
-    3. 각 섹션(상황 분석, 법적 근거, 대응 방법)은 최소 3~4문장 이상의 구체적인 설명을 포함해야 합니다.
-    4. 법적 근거 섹션에서는 관련된 법 조항의 취지나 판례의 경향을 풀어서 설명하세요.
-    5. 답변은 반드시 한국어로 작성하며, 전문가다운 격식 있는 문체를 사용하세요.
-    6. 답변 끝에 '⚠️ 본 답변은 참고용이며 법적 효력이 없습니다.'를 포함하세요.
-    
-    [답변 구조]:
-    ### 📝 상황 분석
-    (사용자의 상황을 법적으로 재해석하고 핵심 쟁점을 짚어주세요)
-
-    ### ⚖️ 법적 근거
-    (참고 데이터와 법률 지식을 바탕으로 상세한 근거를 제시하세요)
-
-    ### 🛠️ 대응 방법
-    (사용자가 당장 실천할 수 있는 구체적인 단계별 대안을 제시하세요)
-    """
-    
+    context_text = "\n\n".join(state.get("context", [])) if state.get("context") else "기존 맥락을 바탕으로 답변하세요."
+    system_instruction = f"당신은 대한민국의 유능한 법률 전문가입니다. 분야({category})에 맞춰 상황 분석, 법적 근거, 대응 방법을 상세히 작성하세요."
     final_prompt = f"{system_instruction}\n\n[참고 데이터]\n{context_text}\n\n[현재 질문]\n{state['question']}"
     response = llm.invoke(final_prompt)
     return {"answer": response.content}
-# --- 5. 그래프 구성 ---
 
+# --- 5. 그래프 구성 ---
 workflow = StateGraph(AgentState)
 workflow.add_node("classifier", classifier_node)
 workflow.add_node("researcher", legal_researcher_node)
 workflow.add_node("generator", answer_generator_node)
-
-def route_by_logic(state: AgentState):
-    if not state.get("need_search", True):
-        return "generator"
-    return "researcher"
-
 workflow.set_entry_point("classifier")
-workflow.add_conditional_edges(
-    "classifier",
-    route_by_logic,
-    {"researcher": "researcher", "generator": "generator"}
-)
+workflow.add_conditional_edges("classifier", lambda x: "generator" if not x.get("need_search", True) else "researcher", {"researcher": "researcher", "generator": "generator"})
 workflow.add_edge("researcher", "generator")
 workflow.add_edge("generator", END)
 
 memory = MemorySaver()
 app = workflow.compile(checkpointer=memory)
 
-# --- 6. Streamlit UI ---
-
+# --- 6. 사이드바 메뉴바 구성 ---
 with st.sidebar:
-    st.title("⚖️ 법률 AI 가이드")
-    if st.button("대화 기록 초기화"):
+    st.title("⚖️ Law-Action Assistant")
+    st.markdown("---")
+    
+    # 메뉴 선택 (확장성 확보)
+    menu = st.radio(
+        "Navigation Menu",
+        ["💬 지능형 법률 상담", "📄 판결문 분석 (OCR)", "📊 나의 상담 리포트"],
+        index=0
+    )
+    
+    st.markdown("---")
+    if st.button("🔄 대화 기록 초기화"):
         st.session_state.messages = []
-        st.session_state.history_cat = "없음" # 카테고리 초기화
+        st.session_state.history_cat = "없음"
         st.rerun()
+    st.markdown("---")
+    st.caption("v1.2 | Developed by 이태건")
+    st.caption("© 2026 Law-Action-Project")
 
-st.title("⚖️ 지능형 법률 에이전트")
+# --- 7. 메뉴별 메인 화면 실행 ---
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+if menu == "💬 지능형 법률 상담":
+    col1, col2 = st.columns([1, 8])
+    with col1: st.image("https://cdn-icons-png.flaticon.com/512/3252/3252906.png", width=70)
+    with col2:
+        st.title("지능형 복합 법률 에이전트")
+        st.subheader("대한민국 22만 건 법령 기반 AI 상담")
 
-# 스레드 ID 고정 (메모리 유지 핵심)
-config = {"configurable": {"thread_id": "final_law_session_v1"}}
+    if "messages" not in st.session_state: st.session_state.messages = []
+    config = {"configurable": {"thread_id": "final_law_session_v1"}}
 
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]): st.markdown(message["content"])
 
-if prompt := st.chat_input("질문을 입력하세요"):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+    if prompt := st.chat_input("사건 내용이나 궁금한 법률 사항을 입력하세요..."):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"): st.markdown(prompt)
 
-    with st.chat_message("assistant"):
-        with st.status("🧠 문맥 분석 중...", expanded=True) as status:
-            # [수정 핵심] context를 []로 강제 초기화하지 않고 전달
-            inputs = {"question": prompt} 
-            result = app.invoke(inputs, config=config) 
-            
-            cat = result.get("category", "기타")
-            search_flag = result.get("need_search", True)
-            
-            if not search_flag:
-                st.write(f"💡 주제(**{cat}**)를 기억하고 있습니다. 추가 검색 없이 답변합니다.")
-            else:
-                st.write(f"🔍 새로운 주제(**{cat}**)에 대한 법령을 검색합니다.")
-            
-            status.update(label="✅ 분석 완료!", state="complete", expanded=False)
+        with st.chat_message("assistant"):
+            with st.status("⚖️ 법률 데이터 분석 중...", expanded=True) as status:
+                st.write("🔍 질문 의도 및 문맥 파악 중...")
+                result = app.invoke({"question": prompt}, config=config) 
+                cat = result.get("category", "기타")
+                if not result.get("need_search", True): st.write(f"📂 **이전 문맥({cat})**을 기억하여 즉시 답변합니다.")
+                else: st.write(f"🌐 **{cat}** 분야 법령 데이터를 검색합니다.")
+                st.write("✍️ 법률 대응 계획 생성 중...")
+                status.update(label=f"✅ {cat} 분야 분석 완료", state="complete", expanded=False)
 
-        st.markdown(result["answer"])
-        
-        if result.get("context"):
-            with st.expander("🔍 참조 법령 원문"):
-                for i, content in enumerate(result["context"]):
-                    st.info(f"📖 참조 {i+1}\n\n{content}")
+            st.markdown(result["answer"])
+            if result.get("context"):
+                with st.expander("📝 참조 법령 및 근거 데이터"):
+                    for i, content in enumerate(result["context"]):
+                        st.markdown(f"**[참조 {i+1}]**"); st.caption(content); st.divider()
+        st.session_state.messages.append({"role": "assistant", "content": result["answer"]})
 
-    st.session_state.messages.append({"role": "assistant", "content": result["answer"]})
+elif menu == "📄 판결문 분석 (OCR)":
+    st.title("📄 판결문 분석 (OCR)")
+    st.subheader("사용자의 판결문을 분석하여 핵심 내용을 요약합니다.")
+    st.warning("⚠️ **해당 서비스는 현재 준비 중입니다.**")
+    st.markdown("""
+    #### 🚀 업데이트 예정 기능:
+    - PDF/이미지 기반 판결문 텍스트 추출 (OCR)
+    - 복잡한 판결문 요약 및 핵심 쟁점 자동 도출
+    - 현재 상담 중기 에이전트와 연동하여 유사 사례 매칭
+    """)
+    st.image("https://cdn-icons-png.flaticon.com/512/2911/2911230.png", width=150)
+
+elif menu == "📊 나의 상담 리포트":
+    st.title("📊 나의 상담 리포트")
+    st.subheader("상담 이력을 분석하여 시각화된 리포트를 제공합니다.")
+    st.info("📅 **2026년 상반기 업데이트 예정입니다.**")
+    st.markdown("""
+    #### 📈 제공 예정 데이터:
+    - 주요 상담 카테고리 통계 (민사/형사/가사 등)
+    - 상담 이력 기반 개인 맞춤형 법률 가이드북 PDF 생성
+    """)
+    st.image("https://cdn-icons-png.flaticon.com/512/3595/3595490.png", width=150)

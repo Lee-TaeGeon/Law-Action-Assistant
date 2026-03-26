@@ -63,6 +63,19 @@ load_dotenv()
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_PROJECT"] = "Law-Action-Assistant-Final-v1.2" 
 
+import re
+def format_law_content(text):
+    """법령의 조, 항, 호, 목을 기준으로 줄바꿈을 추가하는 함수"""
+    # 1. '제N조' 앞에서 줄바꿈
+    text = re.sub(r'(제\d+조)', r'\n\n### \1', text)
+    # 2. '항' 번호(①, ②...) 앞에서 줄바꿈
+    text = re.sub(r'([①-⑮])', r'\n\1', text)
+    # 3. '호' 번호(1., 2....) 앞에서 줄바꿈
+    text = re.sub(r'(\n\s*)(\d+\.)', r'\1\n\2', text)
+    # 4. '목' 번호(가., 나....) 앞에서 줄바꿈
+    text = re.sub(r'(\n\s*)([가-힣]\.)', r'\1\n\2', text)
+    return text.strip()
+
 # 3. 모델 및 DB 로드 (캐싱)
 @st.cache_resource
 def init_models():
@@ -116,12 +129,26 @@ def legal_researcher_node(state: AgentState):
     query = f"{state['category']} 관련 법령 {state['question']}"
     retriever = db.as_retriever(search_kwargs={"k": 5})
     docs = retriever.invoke(query)
-    return {"context": [d.page_content for d in docs]}
+    
+    # 수정 포인트: 본문(page_content)과 메타데이터(metadata)를 합쳐서 전달
+    context_list = []
+    for d in docs:
+        # DB에 저장된 법령 명칭(예: '근로기준법')을 가져옵니다. 
+        # 만약 key값이 다르다면 d.metadata를 찍어보고 맞춰주세요.
+        law_title = d.metadata.get('law_name', d.metadata.get('title', '관련 법령'))
+        context_list.append(f"[{law_title}]: {d.page_content}")
+        
+    return {"context": context_list}
 
 def answer_generator_node(state: AgentState):
     category = state.get("category", "법률")
     context_text = "\n\n".join(state.get("context", [])) if state.get("context") else "기존 맥락을 바탕으로 답변하세요."
-    system_instruction = f"당신은 대한민국의 유능한 법률 전문가입니다. 분야({category})에 맞춰 상황 분석, 법적 근거, 대응 방법을 상세히 작성하세요."
+    
+    # 수정 포인트: 지시사항 구체화
+    system_instruction = f"""당신은 대한민국의 유능한 법률 전문가입니다. 
+    반드시 제공된 [참고 데이터]의 법령 명칭(예: [근로기준법])을 인용하여 답변하세요. 
+    법령 명칭이 없는 데이터는 '관련 법령'으로 지칭하고, 근거가 명확한 경우에만 법명을 언급하세요."""
+    
     final_prompt = f"{system_instruction}\n\n[참고 데이터]\n{context_text}\n\n[현재 질문]\n{state['question']}"
     response = llm.invoke(final_prompt)
     return {"answer": response.content}
@@ -176,25 +203,54 @@ if menu == "💬 지능형 법률 상담":
         with st.chat_message(message["role"]): st.markdown(message["content"])
 
     if prompt := st.chat_input("사건 내용이나 궁금한 법률 사항을 입력하세요..."):
+        # 1. 사용자 메시지 기록 및 출력
         st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"): st.markdown(prompt)
+        with st.chat_message("user"): 
+            st.markdown(prompt)
 
+        # 2. 어시스턴트 응답 생성 영역
         with st.chat_message("assistant"):
             with st.status("⚖️ 법률 데이터 분석 중...", expanded=True) as status:
                 st.write("🔍 질문 의도 및 문맥 파악 중...")
                 result = app.invoke({"question": prompt}, config=config) 
                 cat = result.get("category", "기타")
-                if not result.get("need_search", True): st.write(f"📂 **이전 문맥({cat})**을 기억하여 즉시 답변합니다.")
-                else: st.write(f"🌐 **{cat}** 분야 법령 데이터를 검색합니다.")
+                
+                if not result.get("need_search", True): 
+                    st.write(f"📂 **이전 문맥({cat})**을 기억하여 즉시 답변합니다.")
+                else: 
+                    st.write(f"🌐 **{cat}** 분야 법령 데이터를 검색합니다.")
+                
                 st.write("✍️ 법률 대응 계획 생성 중...")
                 status.update(label=f"✅ {cat} 분야 분석 완료", state="complete", expanded=False)
 
+            # 답변 화면 출력
             st.markdown(result["answer"])
+
+            # 3. 참조 근거 정리 및 저장 로직 (반드시 if prompt 안에 있어야 함!)
+            full_response = result["answer"]
+            
             if result.get("context"):
+                # 화면에 보여줄 익스팬더 (선택 사항)
                 with st.expander("📝 참조 법령 및 근거 데이터"):
                     for i, content in enumerate(result["context"]):
-                        st.markdown(f"**[참조 {i+1}]**"); st.caption(content); st.divider()
-        st.session_state.messages.append({"role": "assistant", "content": result["answer"]})
+                        st.markdown(f"**[참조 {i+1}]**")
+                                    # 1. 여기서 우리가 만든 함수를 호출해서 텍스트를 정제합니다!
+                        clean_content = format_law_content(content)
+                        
+                        # 2. 캡션(st.caption)은 마크다운 문법을 무시하니까 st.markdown으로 출력!
+                        st.markdown(clean_content)
+                        st.divider()
+                
+                # 저장할 메시지에 참조 근거 덧붙이기
+                full_response += "\n\n---\n**📚 참조 근거:**\n"
+                sources = set([c.split("]:")[0].replace("[", "") for c in result["context"] if "]:" in c])
+                if sources:
+                    full_response += ", ".join(sources)
+                else:
+                    full_response += "관련 법령 데이터 참조"
+
+            # 4. 최종적으로 세션 스테이트에 저장 (이 위치가 정답!)
+            st.session_state.messages.append({"role": "assistant", "content": full_response})
 
 elif menu == "📄 판결문 분석 (OCR)":
     st.title("📄 판결문 분석 (OCR)")

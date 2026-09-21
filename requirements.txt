@@ -23,3 +23,6 @@ huggingface-hub
 tqdm
 pandas
 pydantic
+
+fastapi
+uvicorn

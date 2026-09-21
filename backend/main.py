@@ -49,9 +49,10 @@ def chat(request: ChatRequest):
 
         sources = [
             LawSource(
-                law_name=source["law_name"],
-                content=source["content"],
-            )
+                    law_name=source["law_name"],
+                    article=source.get("article"),
+                    content=source["content"],
+        )
             for source in result.get("sources", [])
         ]
 

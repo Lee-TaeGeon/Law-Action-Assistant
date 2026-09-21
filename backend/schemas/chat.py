@@ -9,6 +9,7 @@ class ChatRequest(BaseModel):
 
 class LawSource(BaseModel):
     law_name: str
+    article: str | None = None
     content: str
 
 

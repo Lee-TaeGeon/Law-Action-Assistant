@@ -81,7 +81,7 @@ def format_law_content(text):
 def init_models():
     # Groq Llama 3.3 모델 (초고속 추론 엔진)
     llm = ChatGroq(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
         groq_api_key=os.getenv("GROQ_API_KEY"),
         temperature=0.1
     )

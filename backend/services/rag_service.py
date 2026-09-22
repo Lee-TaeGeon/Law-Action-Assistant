@@ -3,8 +3,13 @@ import sqlite3
 from functools import lru_cache
 from pathlib import Path
 
+import chromadb
+import numpy as np
+
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import Chroma
+from langchain_community.vectorstores.utils import (
+    maximal_marginal_relevance,
+)
 
 
 # =========================================================
@@ -15,7 +20,11 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 
 VECTOR_DB_PATH = (
     BASE_DIR
-    / "law_db_full"
+    / "law_db_optimized"
+)
+
+VECTOR_COLLECTION_NAME = (
+    "law_articles"
 )
 
 SEARCH_DB_PATH = (
@@ -917,44 +926,288 @@ def keyword_search_laws(
 
 
 # =========================================================
-# ChromaDB
+# ChromaDB / Embedding
 # =========================================================
+
+@lru_cache(maxsize=1)
+def get_embedding_model():
+    """
+    Vector 검색에 사용할 임베딩 모델.
+
+    기존 법령 Vector DB를 만들 때와 동일하게
+    jhgan/ko-sroberta-multitask 모델을 사용하고
+    embedding을 L2 norm 1로 정규화한다.
+    """
+
+    return HuggingFaceEmbeddings(
+        model_name=(
+            "jhgan/"
+            "ko-sroberta-multitask"
+        ),
+        model_kwargs={
+            "device": "cpu",
+        },
+        encode_kwargs={
+            "normalize_embeddings":
+                True,
+        },
+    )
+
 
 @lru_cache(maxsize=1)
 def get_vector_db():
     """
-    기존 Chroma 벡터 DB는 그대로 사용한다.
+    최적화된 Chroma Vector DB의
+    law_articles collection을 반환한다.
+
+    새 Vector DB에는
+    법령 본문이나 metadata를 넣지 않고
+    SQLite articles.id를 Chroma id로 사용한다.
     """
 
-    embeddings = (
-        HuggingFaceEmbeddings(
-            model_name=(
-                "jhgan/"
-                "ko-sroberta-multitask"
-            ),
-            model_kwargs={
-                "device": "cpu",
-            },
-            encode_kwargs={
-                "normalize_embeddings":
-                    True,
-            },
+    if not VECTOR_DB_PATH.exists():
+        raise FileNotFoundError(
+            "Vector DB가 없습니다: "
+            f"{VECTOR_DB_PATH}"
+        )
+
+    client = chromadb.PersistentClient(
+        path=str(
+            VECTOR_DB_PATH
         )
     )
 
-    return Chroma(
-        persist_directory=str(
-            VECTOR_DB_PATH
-        ),
-        embedding_function=(
-            embeddings
-        ),
+    try:
+        collection = (
+            client.get_collection(
+                VECTOR_COLLECTION_NAME
+            )
+        )
+
+    except Exception as exc:
+        raise RuntimeError(
+            "Vector collection을 "
+            "불러올 수 없습니다: "
+            f"{VECTOR_COLLECTION_NAME}"
+        ) from exc
+
+    return collection
+
+
+# =========================================================
+# MMR
+# =========================================================
+
+def cosine_similarity_matrix(
+    a,
+    b,
+):
+    """
+    a: (N, D)
+    b: (M, D)
+
+    cosine similarity matrix:
+    (N, M)
+    """
+
+    a = np.asarray(
+        a,
+        dtype=np.float32,
     )
+
+    b = np.asarray(
+        b,
+        dtype=np.float32,
+    )
+
+    if a.ndim == 1:
+        a = a.reshape(
+            1,
+            -1,
+        )
+
+    if b.ndim == 1:
+        b = b.reshape(
+            1,
+            -1,
+        )
+
+    a_norm = np.linalg.norm(
+        a,
+        axis=1,
+        keepdims=True,
+    )
+
+    b_norm = np.linalg.norm(
+        b,
+        axis=1,
+        keepdims=True,
+    )
+
+    # 0으로 나누는 것을 방지한다.
+    a_norm = np.maximum(
+        a_norm,
+        1e-12,
+    )
+
+    b_norm = np.maximum(
+        b_norm,
+        1e-12,
+    )
+
+    return (
+        (a / a_norm)
+        @ (b / b_norm).T
+    )
+
+
+def maximal_marginal_relevance(
+    query_embedding,
+    candidate_embeddings,
+    k: int,
+    lambda_mult: float = 0.75,
+):
+    """
+    기존 LangChain Chroma Retriever에서 사용하던
+    MMR(Maximal Marginal Relevance)을
+    직접 구현한다.
+
+    관련성뿐 아니라 이미 선택된 문서와의
+    중복성도 함께 고려한다.
+    """
+
+    candidate_embeddings = np.asarray(
+        candidate_embeddings,
+        dtype=np.float32,
+    )
+
+    if (
+        candidate_embeddings.ndim != 2
+        or len(candidate_embeddings) == 0
+        or k <= 0
+    ):
+        return []
+
+    query_embedding = np.asarray(
+        query_embedding,
+        dtype=np.float32,
+    ).reshape(
+        1,
+        -1,
+    )
+
+    k = min(
+        k,
+        len(candidate_embeddings),
+    )
+
+    # Query ↔ 각 후보의 similarity
+    similarity_to_query = (
+        cosine_similarity_matrix(
+            candidate_embeddings,
+            query_embedding,
+        )[:, 0]
+    )
+
+    # 첫 번째는 Query와 가장 유사한 후보
+    first_index = int(
+        np.argmax(
+            similarity_to_query
+        )
+    )
+
+    selected = [
+        first_index
+    ]
+
+    selected_set = {
+        first_index
+    }
+
+    while len(selected) < k:
+
+        selected_vectors = (
+            candidate_embeddings[
+                selected
+            ]
+        )
+
+        # 각 후보와 이미 선택된 후보 간 유사도
+        similarity_to_selected = (
+            cosine_similarity_matrix(
+                candidate_embeddings,
+                selected_vectors,
+            )
+        )
+
+        best_index = None
+        best_score = -float(
+            "inf"
+        )
+
+        for index in range(
+            len(candidate_embeddings)
+        ):
+            if index in selected_set:
+                continue
+
+            redundancy = float(
+                np.max(
+                    similarity_to_selected[
+                        index
+                    ]
+                )
+            )
+
+            relevance = float(
+                similarity_to_query[
+                    index
+                ]
+            )
+
+            score = (
+                lambda_mult
+                * relevance
+                - (
+                    1.0
+                    - lambda_mult
+                )
+                * redundancy
+            )
+
+            if score > best_score:
+                best_score = score
+                best_index = index
+
+        if best_index is None:
+            break
+
+        selected.append(
+            best_index
+        )
+
+        selected_set.add(
+            best_index
+        )
+
+    return selected
 
 
 # =========================================================
 # Vector 문서 정보 추출
 # =========================================================
+#
+# 아래 함수들은 기존 law_db_full용으로 사용했던
+# 보정 함수다.
+#
+# 새 law_db_optimized에서는 Chroma id 자체가
+# SQLite articles.id이므로 더 이상 사용하지 않는다.
+#
+# 현재 전환 테스트 단계에서는 기존 함수가 파일에
+# 남아 있어도 문제없다.
+# 테스트가 끝난 뒤 삭제해도 된다.
+# =========================================================
+
 
 def extract_article_number_from_content(
     content: str,
@@ -999,6 +1252,12 @@ def extract_article_title_from_content(
 
 # =========================================================
 # Vector 결과 -> SQLite의 정규화된 조문으로 연결
+# =========================================================
+#
+# 기존 DB 호환용 함수.
+#
+# 새 Vector 검색에서는 사용하지 않는다.
+# 기존 코드를 당장 삭제하지 않기 위해 남겨둔다.
 # =========================================================
 
 def resolve_vector_source(
@@ -1115,8 +1374,6 @@ def resolve_vector_source(
                 "vector",
         }
 
-    # 가지번호가 원본에서 손상된 경우
-    # Chroma 문서의 조문 제목으로 정확한 조문을 찾는다.
     normalized_vector_title = (
         normalize_title(
             vector_title
@@ -1140,8 +1397,6 @@ def resolve_vector_source(
                     "vector",
                 )
 
-    # 제목이 정확히 추출되지 않은 경우
-    # Chroma 본문에 조문 제목이 포함되는지 검사한다.
     compact_document = (
         compact_text(
             doc.page_content
@@ -1166,7 +1421,6 @@ def resolve_vector_source(
                 "vector",
             )
 
-    # 이미 정상적인 가지번호가 있는 경우 우선.
     for row in rows:
 
         if (
@@ -1178,7 +1432,6 @@ def resolve_vector_source(
                 "vector",
             )
 
-    # 마지막 fallback.
     return row_to_source(
         rows[0],
         "vector",
@@ -1195,81 +1448,208 @@ def search_laws(
     k: int = 4,
 ):
     """
-    기존 ChromaDB MMR 검색.
+    최적화된 Chroma Vector DB를 이용해
+    의미 기반 법령 검색을 수행한다.
 
-    단, 검색 결과의 실제 조문 내용과
-    정규화된 가지번호는 SQLite에서 다시 가져온다.
+    구조:
+
+    질문
+      ↓
+    ko-sroberta embedding
+      ↓
+    Chroma L2 후보 검색
+      ↓
+    MMR 재정렬
+      ↓
+    article_id
+      ↓
+    law_search.db 조회
+
+    Vector DB에는 본문이나 metadata를 저장하지 않고
+    SQLite articles.id만 Chroma id로 사용한다.
     """
+
+    if k <= 0:
+        return []
 
     vector_db = (
         get_vector_db()
     )
 
-    query = f"""
-법률 분야: {category}
+    embedding_model = (
+        get_embedding_model()
+    )
 
-사용자 질문:
-{question}
+    query = question.strip()
 
-이 질문을 해결하는 데 직접적으로 관련된
-대한민국 법령과 조문
-"""
+    # 기존 LangChain Retriever 설정과 동일
+    fetch_k = max(
+        20,
+        k * 3,
+    )
 
-    retriever = (
-        vector_db.as_retriever(
-            search_type="mmr",
-            search_kwargs={
-                "k": k,
+    lambda_mult = 0.75
 
-                "fetch_k": max(
-                    20,
-                    k * 3,
-                ),
-
-                "lambda_mult":
-                    0.75,
-            },
+    # 기존 Vector DB 생성 방식과 동일하게
+    # normalize_embeddings=True 사용
+    query_embedding = (
+        embedding_model.embed_query(
+            query
         )
     )
 
-    docs = retriever.invoke(
-        query
+    # -----------------------------------------------------
+    # 1. Chroma에서 후보 검색
+    # -----------------------------------------------------
+
+    raw_results = (
+        vector_db.query(
+            query_embeddings=[
+                query_embedding
+            ],
+            n_results=fetch_k,
+            include=[
+                "embeddings",
+                "distances",
+            ],
+        )
     )
 
-    db = get_search_connection()
+    result_ids = raw_results.get(
+        "ids"
+    )
+
+    if (
+        result_ids is None
+        or len(result_ids) == 0
+        or len(result_ids[0]) == 0
+    ):
+        return []
+
+    candidate_ids = (
+        result_ids[0]
+    )
+
+    result_embeddings = (
+        raw_results.get(
+            "embeddings"
+        )
+    )
+
+    if result_embeddings is None:
+        return []
+
+    candidate_vectors = np.asarray(
+        result_embeddings[0],
+        dtype=np.float32,
+    )
+
+    if (
+        candidate_vectors.ndim != 2
+        or len(candidate_vectors) == 0
+    ):
+        return []
+
+    # -----------------------------------------------------
+    # 2. MMR
+    # -----------------------------------------------------
+
+    selected_indexes = (
+        maximal_marginal_relevance(
+            query_embedding=(
+                query_embedding
+            ),
+            candidate_embeddings=(
+                candidate_vectors
+            ),
+            k=k,
+            lambda_mult=(
+                lambda_mult
+            ),
+        )
+    )
+
+    if not selected_indexes:
+        return []
+
+    # -----------------------------------------------------
+    # 3. article_id → SQLite
+    # -----------------------------------------------------
+
+    db = (
+        get_search_connection()
+    )
 
     results = []
 
-    seen = set()
+    seen_article_ids = set()
 
     try:
-        for doc in docs:
 
-            source = (
-                resolve_vector_source(
-                    db,
-                    doc,
-                )
-            )
+        for index in selected_indexes:
 
-            key = (
-                source.get(
-                    "law_name",
-                    "",
-                ),
-                source.get(
-                    "article",
-                    "",
-                ),
-            )
-
-            if key in seen:
+            if (
+                index < 0
+                or index
+                >= len(candidate_ids)
+            ):
                 continue
 
-            seen.add(key)
+            raw_article_id = (
+                candidate_ids[
+                    index
+                ]
+            )
+
+            try:
+                article_id = int(
+                    raw_article_id
+                )
+
+            except (
+                TypeError,
+                ValueError,
+            ):
+                continue
+
+            if (
+                article_id
+                in seen_article_ids
+            ):
+                continue
+
+            seen_article_ids.add(
+                article_id
+            )
+
+            row = db.execute(
+                """
+                SELECT
+                    law_name,
+                    source_article_no,
+                    article_no,
+                    article_display,
+                    article_title,
+                    content,
+                    source_order
+
+                FROM articles
+
+                WHERE id = ?
+                """,
+                (
+                    article_id,
+                ),
+            ).fetchone()
+
+            if row is None:
+                continue
 
             results.append(
-                source
+                row_to_source(
+                    row,
+                    "vector",
+                )
             )
 
             if len(results) >= k:

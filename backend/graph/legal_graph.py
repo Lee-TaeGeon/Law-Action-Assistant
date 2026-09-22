@@ -378,97 +378,395 @@ def researcher_node(
 
 
 # =========================================================
-# Reranker 후보 압축
+# Reranker 후보 선정 보조 함수
+# =========================================================
+
+def compact_match_text(
+    text: str,
+) -> str:
+    """
+    검색어와 법령명 / 조문명을 비교하기 위해
+    공백과 특수문자를 제거한다.
+    """
+
+    return re.sub(
+        r"[^0-9A-Za-z가-힣]",
+        "",
+        str(
+            text or ""
+        ),
+    ).lower()
+
+
+def candidate_query_score(
+    source: Dict,
+    search_query: str,
+) -> float:
+    """
+    Query Rewriter가 만든 검색어와
+    후보 법령명 / 조문 제목의 직접 일치도를 계산한다.
+
+    Keyword 검색 결과가 단순 순위 때문에 잘리면서
+    핵심 조문이 Reranker에 전달되지 않는 문제를
+    방지하기 위한 deterministic score.
+    """
+
+    law_name = compact_match_text(
+        source.get(
+            "law_name",
+            "",
+        )
+    )
+
+    article_title = compact_match_text(
+        source.get(
+            "article_title",
+            "",
+        )
+    )
+
+    raw_terms = re.split(
+        r"[,/\n]",
+        search_query or "",
+    )
+
+    query_terms = []
+
+    for term in raw_terms:
+
+        normalized = (
+            compact_match_text(
+                term
+            )
+        )
+
+        if normalized:
+            query_terms.append(
+                normalized
+            )
+
+    score = 0.0
+
+    for term in query_terms:
+
+        # -------------------------------------------------
+        # 조문 제목 우선
+        # -------------------------------------------------
+
+        if article_title:
+
+            # 검색어와 조문명이 완전히 일치
+            #
+            # 예:
+            # 재산분할청구권
+            # ↔ 재산분할청구권
+            if (
+                article_title
+                == term
+            ):
+                score += 12.0
+
+            # 조문 제목이 검색 표현 안에 포함
+            #
+            # 예:
+            # 조문명: 임금지급
+            # 검색어: 임금지급청구
+            elif (
+                len(article_title) >= 2
+                and article_title
+                in term
+            ):
+                score += (
+                    8.0
+                    + min(
+                        len(
+                            article_title
+                        ),
+                        10,
+                    )
+                    / 10.0
+                )
+
+            # 검색 표현이 조문 제목 안에 포함
+            elif (
+                len(term) >= 3
+                and term
+                in article_title
+            ):
+                score += 4.0
+
+        # -------------------------------------------------
+        # 법령명
+        # -------------------------------------------------
+
+        if law_name:
+
+            if (
+                law_name
+                == term
+            ):
+                score += 4.0
+
+            elif (
+                len(law_name) >= 3
+                and law_name
+                in term
+            ):
+                score += 2.0
+
+    return score
+
+
+def has_substantive_legal_content(
+    source: Dict,
+) -> bool:
+    """
+    법령명 + 조문 제목만 있고
+    실제 조문 본문이 없는 후보인지 검사한다.
+
+    예:
+
+    <근로기준법>
+    제68조 (임금의 청구)
+
+    위와 같이 실제 내용 없이 제목만 존재하면
+    False를 반환한다.
+    """
+
+    content = str(
+        source.get(
+            "content",
+            "",
+        )
+        or ""
+    )
+
+    if not content.strip():
+        return False
+
+    # -----------------------------------------------------
+    # <근로기준법> 같은 법령 태그 제거
+    # -----------------------------------------------------
+
+    remaining = re.sub(
+        r"<[^>]+>",
+        "",
+        content,
+    )
+
+    # -----------------------------------------------------
+    # 조문 머리말 제거
+    #
+    # 제68조 (임금의 청구)
+    # 제839조의2 (재산분할청구권)
+    # -----------------------------------------------------
+
+    remaining = re.sub(
+        r"제\s*\d+\s*조"
+        r"(?:\s*의\s*\d+)?"
+        r"\s*(?:\([^)]*\))?",
+        "",
+        remaining,
+        count=1,
+    )
+
+    # -----------------------------------------------------
+    # 구분선 / 공백만 남아 있는 경우 제거
+    # -----------------------------------------------------
+
+    remaining = re.sub(
+        r"[-=_\s]",
+        "",
+        remaining,
+    )
+
+    return (
+        len(remaining)
+        >= 3
+    )
+
+
+# =========================================================
+# Reranker 후보 선정
 # =========================================================
 
 def select_reranker_candidates(
     all_candidates: List[Dict],
+    search_query: str,
 ) -> List[Dict]:
     """
     Reranker 프롬프트가 지나치게 커지는 것을 막으면서
     Exact / Keyword / Vector 검색 결과를 균형 있게 유지한다.
+
+    Keyword 후보는 단순 검색 순서만 사용하지 않고
+    검색 질의와 조문 제목 / 법령명의 직접 일치도도
+    함께 고려한다.
     """
 
     exact_candidates = [
         source
-        for source in all_candidates
-        if source.get("source_type") == "exact"
+        for source
+        in all_candidates
+        if source.get(
+            "source_type"
+        ) == "exact"
     ]
 
     keyword_candidates = [
         source
-        for source in all_candidates
-        if source.get("source_type") == "keyword"
+        for source
+        in all_candidates
+        if source.get(
+            "source_type"
+        ) == "keyword"
     ]
 
     vector_candidates = [
         source
-        for source in all_candidates
-        if source.get("source_type") == "vector"
+        for source
+        in all_candidates
+        if source.get(
+            "source_type"
+        ) == "vector"
     ]
 
-    # 검색 방식별 후보 균형 유지
+    # -----------------------------------------------------
+    # Keyword 후보 재정렬
+    #
+    # 조문 제목과 Query Rewrite 결과가
+    # 직접 일치하는 조문을 앞으로 올린다.
+    #
+    # Python sorted()는 stable sort이므로
+    # 점수가 같으면 기존 Keyword 순위가 유지된다.
+    # -----------------------------------------------------
+
+    keyword_candidates = sorted(
+        keyword_candidates,
+        key=lambda source: (
+            candidate_query_score(
+                source,
+                search_query,
+            )
+        ),
+        reverse=True,
+    )
+
+    # -----------------------------------------------------
+    # 최대 8개
+    #
+    # Exact   : 최대 2
+    # Keyword : 최대 4
+    # Vector  : 최대 2
+    # -----------------------------------------------------
+
     initial_candidates = (
         exact_candidates[:2]
-        + keyword_candidates[:3]
+        + keyword_candidates[:4]
         + vector_candidates[:2]
     )
 
     unique_candidates = []
+
     seen = set()
 
     for source in initial_candidates:
+
         key = (
-            source.get("law_name"),
-            source.get("article"),
+            source.get(
+                "law_name"
+            ),
+            source.get(
+                "article"
+            ),
         )
 
         if key in seen:
             continue
 
-        seen.add(key)
-        unique_candidates.append(source)
+        seen.add(
+            key
+        )
 
-        if len(unique_candidates) >= 7:
+        unique_candidates.append(
+            source
+        )
+
+        if (
+            len(
+                unique_candidates
+            )
+            >= 8
+        ):
             break
 
-    # source_type이 예상과 다른 후보가 있거나
-    # 중복 때문에 7개보다 적어진 경우 상위 검색 결과로 보충
-    if len(unique_candidates) < 7:
+    # -----------------------------------------------------
+    # 중복 등으로 8개보다 적으면
+    # 원래 전체 검색 결과에서 추가한다.
+    # -----------------------------------------------------
+
+    if (
+        len(
+            unique_candidates
+        )
+        < 8
+    ):
+
         for source in all_candidates:
+
             key = (
-                source.get("law_name"),
-                source.get("article"),
+                source.get(
+                    "law_name"
+                ),
+                source.get(
+                    "article"
+                ),
             )
 
             if key in seen:
                 continue
 
-            seen.add(key)
-            unique_candidates.append(source)
+            seen.add(
+                key
+            )
 
-            if len(unique_candidates) >= 7:
+            unique_candidates.append(
+                source
+            )
+
+            if (
+                len(
+                    unique_candidates
+                )
+                >= 8
+            ):
                 break
 
-    return unique_candidates[:7]
+    return (
+        unique_candidates[:8]
+    )
 
 
 # =========================================================
-# 4. LLM Reranker
+# 특정 적용대상 후보 제거
 # =========================================================
+
 def filter_scope_mismatch_candidates(
     question: str,
     candidates: List[Dict],
 ):
     """
-    특정 신분/상황에만 적용되는 조문이
-    일반 질문에 섞이는 것을 1차적으로 차단한다.
+    Reranker에 전달하기 전에 다음 후보를 제거한다.
+
+    1. 실제 법문이 없고 제목만 존재하는 조문
+
+    2. 사용자 질문에서 해당 신분/상황이 확인되지 않는데
+       특정 신분이나 상황에만 적용되는 조문
     """
 
     question_text = re.sub(
         r"\s+",
         "",
-        question,
+        question or "",
     )
 
     scope_rules = [
@@ -525,16 +823,47 @@ def filter_scope_mismatch_candidates(
     filtered = []
 
     for source in candidates:
+
+        # -------------------------------------------------
+        # 실제 법문이 없는 조문 제거
+        # -------------------------------------------------
+
+        if not has_substantive_legal_content(
+            source
+        ):
+
+            print(
+                "[본문 없음 제외]",
+                source.get(
+                    "law_name"
+                ),
+                source.get(
+                    "article"
+                ),
+                source.get(
+                    "article_title"
+                ),
+            )
+
+            continue
+
         content = re.sub(
             r"\s+",
             "",
-            source.get(
-                "content",
-                "",
+            str(
+                source.get(
+                    "content",
+                    "",
+                )
+                or ""
             ),
         )
 
         mismatch = False
+
+        # -------------------------------------------------
+        # 특정 적용대상 조문 검사
+        # -------------------------------------------------
 
         for rule in scope_rules:
 
@@ -549,22 +878,21 @@ def filter_scope_mismatch_candidates(
                 continue
 
             question_matches = any(
-                term in question_text
-                for term in rule[
+                term
+                in question_text
+                for term
+                in rule[
                     "question_terms"
                 ]
             )
 
             if not question_matches:
+
                 mismatch = True
                 break
 
-        if not mismatch:
-            filtered.append(
-                source
-            )
+        if mismatch:
 
-        else:
             print(
                 "[적용대상 불일치 제외]",
                 source.get(
@@ -578,11 +906,18 @@ def filter_scope_mismatch_candidates(
                 ),
             )
 
+            continue
+
+        filtered.append(
+            source
+        )
+
     return filtered
 
 
-
-
+# =========================================================
+# 4. LLM Reranker
+# =========================================================
 
 def reranker_node(
     state: AgentState,
@@ -594,21 +929,39 @@ def reranker_node(
         [],
     )
 
-    all_candidates = (
-    filter_scope_mismatch_candidates(
-        state["question"],
-        all_candidates,
-    )
-)
+    # -----------------------------------------------------
+    # 적용대상 불일치 / 본문 없는 조문 제거
+    # -----------------------------------------------------
 
-    candidates = select_reranker_candidates(
-        all_candidates
+    all_candidates = (
+        filter_scope_mismatch_candidates(
+            state["question"],
+            all_candidates,
+        )
+    )
+
+    # -----------------------------------------------------
+    # Reranker 후보 선정
+    # -----------------------------------------------------
+
+    candidates = (
+        select_reranker_candidates(
+            all_candidates,
+            state.get(
+                "search_query",
+                state["question"],
+            ),
+        )
     )
 
     if not candidates:
         return {
             "sources": [],
         }
+
+    # -----------------------------------------------------
+    # 디버깅
+    # -----------------------------------------------------
 
     print(
         "\n=== Reranker 입력 후보 ==="
@@ -619,25 +972,41 @@ def reranker_node(
     ):
         print(
             f"[{index}]",
-            source.get("law_name"),
-            source.get("article"),
-            source.get("article_title"),
-            source.get("source_type"),
+            source.get(
+                "law_name"
+            ),
+            source.get(
+                "article"
+            ),
+            source.get(
+                "article_title"
+            ),
+            source.get(
+                "source_type"
+            ),
         )
+
+    # -----------------------------------------------------
+    # Reranker Prompt 후보 구성
+    # -----------------------------------------------------
 
     candidate_parts = []
 
     for index, source in enumerate(
         candidates
     ):
+
         content = (
-            source.get("content")
+            source.get(
+                "content"
+            )
             or ""
         )
 
-        # Groq TPM 초과를 방지하기 위해
-        # Reranker에는 조문 앞부분만 전달한다.
-        content = content[:400]
+        # Groq TPM 초과 방지
+        content = (
+            content[:400]
+        )
 
         candidate_parts.append(
             (
@@ -658,113 +1027,85 @@ def reranker_node(
         candidate_parts
     )
 
+    # -----------------------------------------------------
+    # LLM Reranker
+    # -----------------------------------------------------
+
     prompt = f"""
 당신은 대한민국 법률 RAG 검색 결과 평가기입니다.
 
-사용자의 질문 해결에 직접 필요한 법령을 선택하세요.
+사용자의 질문 해결에 직접 필요한 법령만 선택하세요.
 
 선택 원칙:
 
 1. 가장 먼저 사용자의 권리ㆍ의무ㆍ책임을
    직접 규정하는 핵심 조문을 찾으세요.
 
-2. 질문의 핵심 행위 자체를 규정하는 조문을
+2. 질문의 핵심 행위 자체를 직접 규정하는 조문을
    특별 구제제도나 행정절차 조문보다 우선하세요.
 
 예:
 
 - 임금을 받지 못한 질문이라면
-  임금 지급 의무를 직접 규정하는 조문을 우선합니다.
+  임금 지급 의무를 직접 규정하는 조문을 우선하세요.
 
-- 그 다음 미지급 임금의 지연이자,
-  손해배상 또는 구제절차 등을
-  보조 근거로 선택할 수 있습니다.
+- 사기 피해 질문이라면
+  사기죄의 구성요건을 규정하는 조문을 우선하고,
+  고소 방법을 묻는 경우에는 고소권 등
+  실제 절차를 규정하는 조문을 추가로 선택할 수 있습니다.
 
-3. 단순히 같은 단어가 등장한다는 이유로
+3. 단순히 같은 단어가 등장한다는 이유만으로
    법령을 선택하지 마세요.
 
 4. 행정기관 조직, 위원회 구성,
-   자료 제공, 명단 공개 등의 규정은
-   사용자 질문이 직접 해당 내용을 묻는 경우가 아니라면
+   자료 제공, 명단 공개 등의 조문은
+   사용자가 그 내용을 직접 묻는 경우가 아니라면
    핵심 근거로 선택하지 마세요.
 
 5. 질문과 직접 관련된 일반적인 법적 의무가 있다면
-   특수한 상황에서만 적용되는 법령보다 우선하세요.
+   특수한 신분이나 상황에만 적용되는 조문보다
+   일반 조문을 우선하세요.
 
-6. 조문 제목이 질문의 핵심 쟁점과 직접 일치하면
-   중요하게 평가하세요.
+6. 조문 제목이 질문의 핵심 쟁점과 직접 일치한다고 해서
+   제목만 보고 선택하지 마세요.
+   반드시 실제 조문 내용도 질문에 적용되는지 확인하세요.
 
-7. 사용자의 질문을 해결하는 데 필요한
-   실질적인 법적 근거를 우선하세요.
+7. "본장의 죄", "본절의 죄", "전조의 죄"처럼
+   다른 조문이나 장ㆍ절을 전제로 하는 규정은
+   현재 질문과 그 전제가 직접 연결되는 경우에만 선택하세요.
 
-8. 최대 4개만 선택하세요.
+8. 실체적인 권리ㆍ의무를 직접 규정하는 조문이 있다면
+   일반적인 소송 절차, 관할, 행정조직 조문보다
+   우선하세요.
 
-9. 관련성이 충분한 법령이 1~3개뿐이라면
-   억지로 4개를 채우지 마세요.
+9. 특정 절차에만 적용되는 특별 규정은
+   사용자가 그 절차나 상황에 해당한다는 근거가 있을 때만
+   선택하세요.
 
-10. 같은 단어나 유사한 개념이 등장하더라도
+10. 같은 단어나 비슷한 개념이 등장하더라도
     사용자 질문과 법률관계가 다른 조문은 제외하세요.
 
-    예를 들어 이혼 문제와 상속 문제,
-    임금체불 문제와 부당해고 문제처럼
-    법률 분야가 비슷하더라도 실제 쟁점이 다르면
-    핵심 근거로 선택하지 마세요.
-
-11. 실체적인 권리ㆍ의무를 직접 규정하는 조문이 있다면
-    일반적인 소송 절차나 관할 조문보다 우선하세요.
-
-12. 조문 제목만 보고 선택하지 마세요.
-    반드시 조문 본문에서 적용 대상과 적용 조건을 확인하세요.
-
-13. 특정 대상이나 특정 상황에만 적용되는 조문은
-    사용자 질문에 그 조건이 명시되어 있지 않다면
-    선택하지 마세요.
-
-    예:
-    - 미성년자에게만 적용되는 조문
-    - 선원에게만 적용되는 조문
-    - 건설업에만 적용되는 조문
-    - 특정 산업 종사자에게만 적용되는 조문
-    - 임산부에게만 적용되는 조문
-    - 퇴직한 근로자에게만 적용되는 조문
-
-14. 예를 들어 근로기준법 제68조는
-    미성년자가 독자적으로 임금을 청구할 수 있다는
-    특별 규정이므로,
-    사용자가 미성년자라는 사실이 없는 일반 임금체불 질문에는
-    선택하지 마세요.
-
-15. 일반적인 규정과 특별한 대상에게만 적용되는 규정이
-    동시에 후보에 있다면,
-    사용자의 사실관계에 특별 조건이 확인되지 않는 한
-    일반 규정을 우선하세요.
-
-16. "본장의 죄", "본절의 죄", "이 장의 죄",
-    "전조의 죄"처럼 적용 범위가 제한된 조문은
-    일반적인 규정으로 해석하지 마세요.
-
-17. 위와 같은 조문은 해당 장ㆍ절ㆍ참조 조문이
-    사용자의 사건과 실제로 관련되어 있는 경우에만
-    선택하세요.
-
-18. 조문 제목이 "고소", "신청", "청구"처럼
-    사용자의 질문과 같더라도,
-    조문 본문이 특정 범죄ㆍ특정 장ㆍ특정 대상에만
-    적용되는 규정이라면 제외하세요.
-
-19. 일반적인 절차상 권리를 직접 규정하는 조문과
-    특정 범죄에만 적용되는 특별 규정이 동시에 있다면,
-    사용자의 사건이 특별 규정의 적용 대상이라고
-    확인되지 않는 한 일반 규정을 우선하세요.
-
 예:
-- 형사소송법의 "범죄로 인한 피해자는 고소할 수 있다"는
-  일반적인 고소권 규정은 피해자의 고소 가능성을
-  판단하는 근거가 될 수 있습니다.
 
-- "본장의 죄는 고소가 있어야 공소를 제기할 수 있다"는
-  조문은 해당 장의 범죄에만 적용되므로,
-  다른 범죄의 일반적인 고소 근거로 사용하면 안 됩니다.
+- 이혼 재산분할 질문에 상속재산 분할 조문
+- 일반 임금체불 질문에 선원이나 건설업 전용 조문
+- 일반 사기 피해 질문에 별개의 특수 범죄 조문
+
+등은 제외하세요.
+
+11. 절차에 관한 질문이라면
+    실제로 그 절차를 규정하는 조문을 선택하세요.
+
+실체법 조문만으로
+신고ㆍ고소ㆍ신청 절차까지 확대 해석하지 마세요.
+
+12. 최대 4개만 선택하세요.
+
+13. 관련성이 충분한 법령이 1~2개뿐이라면
+    억지로 4개를 채우지 마세요.
+
+14. 제공된 후보 이외의 법령이나 조문은
+    새로 만들어내지 마세요.
 
 사용자 질문:
 {state["question"]}
@@ -785,15 +1126,20 @@ def reranker_node(
 """
 
     response = (
-        llm.invoke(prompt)
+        llm.invoke(
+            prompt
+        )
         .content
         .strip()
     )
 
-    # 아래와 같은 응답 형식을 모두 처리한다.
+    # -----------------------------------------------------
+    # 응답 번호 추출
     #
     # 0,2,5
     # [0, 2, 5]
+    # 모두 처리
+    # -----------------------------------------------------
 
     index_values = re.findall(
         r"\d+",
@@ -801,10 +1147,14 @@ def reranker_node(
     )
 
     selected = []
+
     seen_indices = set()
 
     for value in index_values:
-        index = int(value)
+
+        index = int(
+            value
+        )
 
         if index in seen_indices:
             continue
@@ -813,16 +1163,26 @@ def reranker_node(
             0 <= index
             < len(candidates)
         ):
+
             selected.append(
-                candidates[index]
+                candidates[
+                    index
+                ]
             )
 
             seen_indices.add(
                 index
             )
 
-        if len(selected) >= 4:
+        if (
+            len(selected)
+            >= 4
+        ):
             break
+
+    # -----------------------------------------------------
+    # 디버깅
+    # -----------------------------------------------------
 
     print(
         "\n=== Reranker 원본 응답 ==="
@@ -837,16 +1197,26 @@ def reranker_node(
     )
 
     if not selected:
+
         print(
             "최종 선택 법령 없음"
         )
 
     for source in selected:
+
         print(
-            source.get("law_name"),
-            source.get("article"),
-            source.get("article_title"),
-            source.get("source_type"),
+            source.get(
+                "law_name"
+            ),
+            source.get(
+                "article"
+            ),
+            source.get(
+                "article_title"
+            ),
+            source.get(
+                "source_type"
+            ),
         )
 
     return {

@@ -37,12 +37,20 @@ class AgentState(TypedDict, total=False):
 
 @lru_cache(maxsize=1)
 def get_llm():
+    api_key = os.getenv("GROQ_API_KEY")
+
+    if not api_key:
+        raise RuntimeError(
+            "GROQ_API_KEY가 설정되어 있지 않습니다."
+        )
+
     return ChatGroq(
         model="openai/gpt-oss-120b",
-        groq_api_key=os.getenv(
-            "GROQ_API_KEY"
-        ),
+        groq_api_key=api_key,
         temperature=0.1,
+
+        # Groq TPM 사용량을 과도하게 잡지 않도록 제한
+        max_tokens=1000,
     )
 
 
@@ -92,7 +100,6 @@ def classifier_node(
     category = "기타"
 
     for item in allowed_categories:
-
         if item in response:
             category = item
             break
@@ -179,14 +186,14 @@ def query_rewriter_node(
 def researcher_node(
     state: AgentState,
 ):
-    search_query = state[
-        "search_query"
-    ]
+    search_query = state["search_query"]
 
     # -----------------------------------------------------
     # Exact Search
     #
-    # 사용자가 직접 입력한 법령/조문에만 사용한다.
+    # 사용자가 직접 입력한 법령/조문만 대상으로 한다.
+    # Query Rewriter가 만든 조문 번호를 Exact Search에
+    # 사용하면 잘못된 조문을 추측할 위험이 있다.
     # -----------------------------------------------------
 
     exact_sources = exact_search_laws(
@@ -195,7 +202,6 @@ def researcher_node(
 
     # -----------------------------------------------------
     # Keyword Search
-    # 후보를 12개까지 가져온다.
     # -----------------------------------------------------
 
     keyword_sources = keyword_search_laws(
@@ -214,11 +220,10 @@ def researcher_node(
     )
 
     # -----------------------------------------------------
-    # Exact + Keyword + Vector 병합
+    # Exact + Keyword + Vector 병합 및 중복 제거
     # -----------------------------------------------------
 
     combined = []
-
     seen = set()
 
     for source in (
@@ -227,22 +232,15 @@ def researcher_node(
         + vector_sources
     ):
         key = (
-            source["law_name"],
-            source.get(
-                "article"
-            ),
+            source.get("law_name"),
+            source.get("article"),
         )
 
         if key in seen:
             continue
 
-        seen.add(
-            key
-        )
-
-        combined.append(
-            source
-        )
+        seen.add(key)
+        combined.append(source)
 
     # =====================================================
     # 디버깅 출력
@@ -251,6 +249,7 @@ def researcher_node(
     print(
         "\n=== 검색 질의 ==="
     )
+
     print(
         search_query
     )
@@ -266,13 +265,9 @@ def researcher_node(
 
     for source in exact_sources:
         print(
-            source["law_name"],
-            source.get(
-                "article"
-            ),
-            source.get(
-                "article_title"
-            ),
+            source.get("law_name"),
+            source.get("article"),
+            source.get("article_title"),
         )
 
     print(
@@ -286,28 +281,25 @@ def researcher_node(
 
     for source in keyword_sources:
         print(
-            source["law_name"],
-            source.get(
-                "article"
-            ),
-            source.get(
-                "article_title"
-            ),
+            source.get("law_name"),
+            source.get("article"),
+            source.get("article_title"),
         )
 
     print(
         "\n=== Vector 검색 ==="
     )
 
+    if not vector_sources:
+        print(
+            "Vector 검색 결과 없음"
+        )
+
     for source in vector_sources:
         print(
-            source["law_name"],
-            source.get(
-                "article"
-            ),
-            source.get(
-                "article_title"
-            ),
+            source.get("law_name"),
+            source.get("article"),
+            source.get("article_title"),
         )
 
     print(
@@ -319,21 +311,91 @@ def researcher_node(
     ):
         print(
             f"[{index}]",
-            source["law_name"],
-            source.get(
-                "article"
-            ),
-            source.get(
-                "article_title"
-            ),
-            source.get(
-                "source_type"
-            ),
+            source.get("law_name"),
+            source.get("article"),
+            source.get("article_title"),
+            source.get("source_type"),
         )
 
     return {
         "candidate_sources": combined,
     }
+
+
+# =========================================================
+# Reranker 후보 압축
+# =========================================================
+
+def select_reranker_candidates(
+    all_candidates: List[Dict],
+) -> List[Dict]:
+    """
+    Reranker 프롬프트가 지나치게 커지는 것을 막으면서
+    Exact / Keyword / Vector 검색 결과를 균형 있게 유지한다.
+    """
+
+    exact_candidates = [
+        source
+        for source in all_candidates
+        if source.get("source_type") == "exact"
+    ]
+
+    keyword_candidates = [
+        source
+        for source in all_candidates
+        if source.get("source_type") == "keyword"
+    ]
+
+    vector_candidates = [
+        source
+        for source in all_candidates
+        if source.get("source_type") == "vector"
+    ]
+
+    # 검색 방식별 후보 균형 유지
+    initial_candidates = (
+        exact_candidates[:2]
+        + keyword_candidates[:3]
+        + vector_candidates[:2]
+    )
+
+    unique_candidates = []
+    seen = set()
+
+    for source in initial_candidates:
+        key = (
+            source.get("law_name"),
+            source.get("article"),
+        )
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        unique_candidates.append(source)
+
+        if len(unique_candidates) >= 7:
+            break
+
+    # source_type이 예상과 다른 후보가 있거나
+    # 중복 때문에 7개보다 적어진 경우 상위 검색 결과로 보충
+    if len(unique_candidates) < 7:
+        for source in all_candidates:
+            key = (
+                source.get("law_name"),
+                source.get("article"),
+            )
+
+            if key in seen:
+                continue
+
+            seen.add(key)
+            unique_candidates.append(source)
+
+            if len(unique_candidates) >= 7:
+                break
+
+    return unique_candidates[:7]
 
 
 # =========================================================
@@ -345,9 +407,13 @@ def reranker_node(
 ):
     llm = get_llm()
 
-    candidates = state.get(
+    all_candidates = state.get(
         "candidate_sources",
         [],
+    )
+
+    candidates = select_reranker_candidates(
+        all_candidates
     )
 
     if not candidates:
@@ -355,18 +421,34 @@ def reranker_node(
             "sources": [],
         }
 
+    print(
+        "\n=== Reranker 입력 후보 ==="
+    )
+
+    for index, source in enumerate(
+        candidates
+    ):
+        print(
+            f"[{index}]",
+            source.get("law_name"),
+            source.get("article"),
+            source.get("article_title"),
+            source.get("source_type"),
+        )
+
     candidate_parts = []
 
     for index, source in enumerate(
         candidates
     ):
-        content = source.get(
-            "content",
-            "",
+        content = (
+            source.get("content")
+            or ""
         )
 
-        # Prompt가 너무 길어지는 것을 방지
-        content = content[:1500]
+        # Groq TPM 초과를 방지하기 위해
+        # Reranker에는 조문 앞부분만 전달한다.
+        content = content[:400]
 
         candidate_parts.append(
             (
@@ -374,7 +456,7 @@ def reranker_node(
                 f"검색방식: "
                 f"{source.get('source_type', '')}\n"
                 f"법령: "
-                f"{source['law_name']} "
+                f"{source.get('law_name', '')} "
                 f"{source.get('article') or ''}\n"
                 f"조문명: "
                 f"{source.get('article_title') or ''}\n"
@@ -428,7 +510,7 @@ def reranker_node(
 
 8. 최대 4개만 선택하세요.
 
-9. 관련성이 충분한 법령이 2개뿐이라면
+9. 관련성이 충분한 법령이 1~3개뿐이라면
    억지로 4개를 채우지 마세요.
 
 10. 같은 단어나 유사한 개념이 등장하더라도
@@ -466,23 +548,21 @@ def reranker_node(
         .strip()
     )
 
+    # 아래와 같은 응답 형식을 모두 처리한다.
+    #
     # 0,2,5
     # [0, 2, 5]
-    # 같은 형식 모두 대응
+
     index_values = re.findall(
         r"\d+",
         response,
     )
 
     selected = []
-
     seen_indices = set()
 
     for value in index_values:
-
-        index = int(
-            value
-        )
+        index = int(value)
 
         if index in seen_indices:
             continue
@@ -521,16 +601,10 @@ def reranker_node(
 
     for source in selected:
         print(
-            source["law_name"],
-            source.get(
-                "article"
-            ),
-            source.get(
-                "article_title"
-            ),
-            source.get(
-                "source_type"
-            ),
+            source.get("law_name"),
+            source.get("article"),
+            source.get("article_title"),
+            source.get("source_type"),
         )
 
     return {
@@ -553,21 +627,30 @@ def generator_node(
     )
 
     if sources:
-
         context_parts = []
 
         for index, source in enumerate(
             sources
         ):
+            content = (
+                source.get("content")
+                or ""
+            )
+
+            # 최종 답변 생성 시에도 너무 긴 조문 전체를
+            # LLM에 전달하지 않는다.
+            content = content[:900]
+
             context_parts.append(
                 (
                     f"[출처 {index + 1}]\n"
                     f"법령: "
-                    f"{source['law_name']} "
+                    f"{source.get('law_name', '')} "
                     f"{source.get('article') or ''}\n"
                     f"조문명: "
                     f"{source.get('article_title') or ''}\n"
-                    f"{source['content']}"
+                    f"내용:\n"
+                    f"{content}"
                 )
             )
 
@@ -576,7 +659,6 @@ def generator_node(
         )
 
     else:
-
         context = (
             "검색된 관련 법령이 없습니다."
         )
@@ -631,17 +713,27 @@ def generator_node(
 14. 검색된 법령 중 질문과 직접 관련 없는 내용은
     억지로 답변에 포함하지 마세요.
 
+15. 검색된 법령이 없다면
+    법령명이나 구체적인 법적 절차를 추측하지 말고
+    현재 검색 결과만으로 답변하기 어렵다고 설명하세요.
+
 반드시 아래 형식으로 답변하세요.
 
 ## 상황 분석
+
 사용자의 상황과 핵심 쟁점을
 2~4문장으로 설명합니다.
 
 ## 대응 방법
+
 검색된 법령을 근거로 실제로 취할 수 있는 행동을
 번호 목록으로 3~6개 제시합니다.
 
+단, 검색 자료가 부족하다면
+억지로 3개 이상 만들지 마세요.
+
 ## 주의사항
+
 사실관계에 따라 달라질 수 있는 부분과
 검색된 법령만으로 확인하기 어려운 내용을 설명합니다.
 

@@ -4,7 +4,7 @@ from functools import lru_cache
 from typing import TypedDict, List, Dict
 
 from dotenv import load_dotenv
-from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -35,22 +35,43 @@ class AgentState(TypedDict, total=False):
 # LLM
 # =========================================================
 
+# =========================================================
+# LLM
+# =========================================================
+
 @lru_cache(maxsize=1)
-def get_llm():
-    api_key = os.getenv("GROQ_API_KEY")
+def get_fast_llm():
+    """
+    분류 / 검색어 생성 / Reranking용 저비용 모델
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
 
     if not api_key:
         raise RuntimeError(
-            "GROQ_API_KEY가 설정되어 있지 않습니다."
+            "OPENAI_API_KEY가 설정되어 있지 않습니다."
         )
 
-    return ChatGroq(
-        model="openai/gpt-oss-120b",
-        groq_api_key=api_key,
-        temperature=0.1,
+    return ChatOpenAI(
+        model="gpt-5-nano",
+        api_key=api_key,
+    )
 
-        # Groq TPM 사용량을 과도하게 잡지 않도록 제한
-        max_tokens=1000,
+
+@lru_cache(maxsize=1)
+def get_answer_llm():
+    """
+    최종 법률 답변 생성용 모델
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+
+    if not api_key:
+        raise RuntimeError(
+            "OPENAI_API_KEY가 설정되어 있지 않습니다."
+        )
+
+    return ChatOpenAI(
+        model="gpt-5.6-luna",
+        api_key=api_key,
     )
 
 
@@ -61,7 +82,7 @@ def get_llm():
 def classifier_node(
     state: AgentState,
 ):
-    llm = get_llm()
+    llm = get_fast_llm()
 
     prompt = f"""
 당신은 대한민국 법률 상담 질문 분류기입니다.
@@ -128,7 +149,7 @@ def classifier_node(
 def query_rewriter_node(
     state: AgentState,
 ):
-    llm = get_llm()
+    llm = get_fast_llm()
 
     prompt = f"""
 당신은 대한민국 법령 검색을 위한
@@ -922,7 +943,7 @@ def filter_scope_mismatch_candidates(
 def reranker_node(
     state: AgentState,
 ):
-    llm = get_llm()
+    llm = get_fast_llm()
 
     all_candidates = state.get(
         "candidate_sources",
@@ -1231,7 +1252,7 @@ def reranker_node(
 def generator_node(
     state: AgentState,
 ):
-    llm = get_llm()
+    llm = get_fast_llm()
 
     sources = state.get(
         "sources",

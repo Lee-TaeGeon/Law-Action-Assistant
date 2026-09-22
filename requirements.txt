@@ -1,28 +1,15 @@
-# Web Framework
-streamlit
+fastapi==0.141.1
+uvicorn==0.53.0
+python-dotenv==1.2.3
+python-multipart==0.0.32
+pydantic==2.13.5
 
-# Core Frameworks
-langchain
-langchain-community
-langchain-huggingface
-langgraph
-langsmith
+langchain-core==1.6.3
+langchain-groq==1.1.3
+langchain-huggingface==1.2.2
+langgraph==1.2.11
 
-# LLM & API (현재 사용 중인 Groq 추가)
-langchain-groq
-python-dotenv
-
-# Vector DB & Embeddings (버전 충돌 방지를 위해 pysqlite3-binary 추가 권장)
-chromadb
-sentence-transformers
-huggingface-hub
-# Streamlit Cloud에서 ChromaDB 사용 시 필수인 경우가 많습니다
-# pysqlite3-binary
-
-# Utilities
-tqdm
-pandas
-pydantic
-
-fastapi
-uvicorn
+chromadb==1.5.9
+sentence-transformers==6.1.0
+huggingface-hub==1.32.0
+numpy==2.4.6

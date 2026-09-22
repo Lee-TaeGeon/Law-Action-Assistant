@@ -16,10 +16,20 @@ from langchain_community.vectorstores.utils import (
 # 경로
 # =========================================================
 
+import os
+from pathlib import Path
+
 BASE_DIR = Path(__file__).resolve().parents[2]
 
+DATA_DIR = Path(
+    os.getenv(
+        "LAW_DATA_DIR",
+        str(BASE_DIR),
+    )
+)
+
 VECTOR_DB_PATH = (
-    BASE_DIR
+    DATA_DIR
     / "law_db_optimized"
 )
 
@@ -28,7 +38,7 @@ VECTOR_COLLECTION_NAME = (
 )
 
 SEARCH_DB_PATH = (
-    BASE_DIR
+    DATA_DIR
     / "law_search.db"
 )
 

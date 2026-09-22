@@ -13,3 +13,4 @@ chromadb==1.5.9
 sentence-transformers==6.1.0
 huggingface-hub==1.32.0
 numpy==2.4.6
+langchain-community==0.4.2

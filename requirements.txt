@@ -4,7 +4,7 @@ python-dotenv==1.2.3
 python-multipart==0.0.32
 pydantic==2.13.5
 
-langchain-core==1.6.3
+langchain-core==1.6.4
 langchain-openai==1.6.3
 langchain-huggingface==1.2.2
 langgraph==1.2.11

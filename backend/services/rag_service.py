@@ -1,5 +1,5 @@
-import json
 import re
+import sqlite3
 from functools import lru_cache
 from pathlib import Path
 
@@ -8,66 +8,102 @@ from langchain_community.vectorstores import Chroma
 
 
 # =========================================================
-# 경로 설정
+# 경로
 # =========================================================
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
-DB_PATH = BASE_DIR / "law_db_full"
+VECTOR_DB_PATH = (
+    BASE_DIR
+    / "law_db_full"
+)
 
-DATASET_PATH = BASE_DIR / "korean_law_full_dataset.json"
+SEARCH_DB_PATH = (
+    BASE_DIR
+    / "law_search.db"
+)
 
 
 # =========================================================
-# 법령 JSON 로드
+# SQLite
 # =========================================================
 
-@lru_cache(maxsize=1)
-def get_law_dataset():
+def get_search_connection():
     """
-    전체 법령 JSON 데이터를 최초 1회만 메모리에 로드한다.
+    법령 검색용 SQLite DB를 읽기 전용으로 연다.
+
+    요청마다 연결하고 닫기 때문에
+    FastAPI 멀티스레드 환경에서도 안전하게 사용한다.
     """
-    with open(
-        DATASET_PATH,
-        "r",
-        encoding="utf-8",
-    ) as f:
-        return json.load(f)
+
+    if not SEARCH_DB_PATH.exists():
+        raise FileNotFoundError(
+            f"법령 검색 DB가 없습니다: "
+            f"{SEARCH_DB_PATH}"
+        )
+
+    uri = (
+        f"file:{SEARCH_DB_PATH}"
+        "?mode=ro"
+    )
+
+    connection = sqlite3.connect(
+        uri,
+        uri=True,
+        timeout=30,
+    )
+
+    connection.row_factory = (
+        sqlite3.Row
+    )
+
+    return connection
 
 
-@lru_cache(maxsize=1)
-def get_law_index():
-    """
-    법령명을 key로 빠르게 조회할 수 있는 인덱스.
-    """
-    dataset = get_law_dataset()
-
-    return {
-        law.get("law_name"): law
-        for law in dataset
-        if law.get("law_name")
-    }
-
+# =========================================================
+# 법령명
+# =========================================================
 
 @lru_cache(maxsize=1)
 def get_law_names():
     """
-    긴 법령명을 먼저 검사할 수 있도록 길이순으로 정렬한다.
+    Exact Search에서 사용할 법령명을
+    SQLite에서 최초 1회 읽는다.
+
+    긴 법령명을 먼저 검사한다.
     """
-    return sorted(
-        get_law_index().keys(),
-        key=len,
-        reverse=True,
-    )
+
+    db = get_search_connection()
+
+    try:
+        rows = db.execute(
+            """
+            SELECT law_name
+            FROM laws
+            ORDER BY
+                LENGTH(law_name) DESC
+            """
+        ).fetchall()
+
+        return [
+            row["law_name"]
+            for row in rows
+        ]
+
+    finally:
+        db.close()
 
 
 # =========================================================
 # 문자열 정규화
 # =========================================================
 
-def normalize_title(title: str | None):
+def normalize_title(
+    title: str | None,
+):
     """
-    예:
+    제목 비교용 정규화.
+
     사기죄 -> 사기
     """
 
@@ -77,7 +113,7 @@ def normalize_title(title: str | None):
     title = re.sub(
         r"\s+",
         "",
-        title,
+        str(title),
     )
 
     if title.endswith("죄"):
@@ -86,16 +122,71 @@ def normalize_title(title: str | None):
     return title
 
 
-def format_article_number(article_no: str):
+def compact_text(
+    text: str | None,
+):
+    if not text:
+        return ""
+
+    return re.sub(
+        r"\s+",
+        "",
+        str(text),
+    )
+
+
+def normalize_article_number(
+    article_no: str | None,
+):
     """
-    347     -> 제347조
-    347의2  -> 제347조의2
+    제347조       -> 347
+    제347조의2    -> 347의2
+    347           -> 347
+    347의2        -> 347의2
     """
 
-    article_no = str(article_no).strip()
+    if article_no is None:
+        return ""
+
+    text = re.sub(
+        r"\s+",
+        "",
+        str(article_no),
+    )
+
+    match = re.fullmatch(
+        r"제?(\d+)조?(?:의(\d+))?",
+        text,
+    )
+
+    if not match:
+        return text
+
+    base = match.group(1)
+    sub = match.group(2)
+
+    if sub:
+        return f"{base}의{sub}"
+
+    return base
+
+
+def format_article_number(
+    article_no: str | None,
+):
+    """
+    347 -> 제347조
+    347의2 -> 제347조의2
+    """
+
+    article_no = (
+        normalize_article_number(
+            article_no
+        )
+    )
 
     if not article_no:
-        return ""
+        return None
 
     if "의" in article_no:
         base, sub = article_no.split(
@@ -103,229 +194,35 @@ def format_article_number(article_no: str):
             1,
         )
 
-        return f"제{base}조의{sub}"
+        return (
+            f"제{base}조의{sub}"
+        )
 
     return f"제{article_no}조"
 
 
 # =========================================================
-# 유실된 가지번호 복원
-# =========================================================
-
-def is_empty_article(article: dict):
-    """
-    데이터 파싱 과정에서 생긴 빈 placeholder인지 확인한다.
-    """
-
-    title = str(
-        article.get(
-            "article_title",
-            "",
-        )
-    ).strip()
-
-    paragraphs = article.get(
-        "paragraphs",
-        [],
-    )
-
-    return (
-        not title
-        and not paragraphs
-    )
-
-
-def get_normalized_articles(law: dict):
-    """
-    데이터셋에서 유실된 가지번호를 복원한다.
-
-    예:
-
-    43 / 임금 지급
-    43 / 체불사업주 명단 공개
-    43 / 임금등 체불자료의 제공
-
-    ->
-
-    43
-    43의2
-    43의3
-    """
-
-    results = []
-
-    previous_base = None
-    sequence = 0
-
-    for article in law.get(
-        "data",
-        [],
-    ):
-        base_no = str(
-            article.get(
-                "article_no",
-                "",
-            )
-        ).strip()
-
-        if not base_no:
-            continue
-
-        # 빈 placeholder는 제외
-        if is_empty_article(article):
-            continue
-
-        # 이미 가지번호가 정상적으로 들어있는 경우
-        if "의" in base_no:
-            normalized_no = base_no
-
-            previous_base = None
-            sequence = 0
-
-        else:
-            if base_no != previous_base:
-                previous_base = base_no
-                sequence = 1
-            else:
-                sequence += 1
-
-            if sequence == 1:
-                normalized_no = base_no
-            else:
-                normalized_no = (
-                    f"{base_no}의{sequence}"
-                )
-
-        normalized_article = dict(
-            article
-        )
-
-        normalized_article[
-            "normalized_article_no"
-        ] = normalized_no
-
-        results.append(
-            normalized_article
-        )
-
-    return results
-
-
-def get_article_no(article: dict):
-    """
-    정규화된 조문번호를 우선 사용한다.
-    """
-
-    return str(
-        article.get(
-            "normalized_article_no",
-            article.get(
-                "article_no",
-                "",
-            ),
-        )
-    ).strip()
-
-
-# =========================================================
-# JSON 조문 -> 문자열 변환
-# =========================================================
-
-def format_exact_article(
-    law_name: str,
-    article: dict,
-):
-    """
-    JSON 조문 데이터를 LLM이 사용할 문자열로 변환한다.
-    """
-
-    article_no = get_article_no(
-        article
-    )
-
-    article_title = article.get(
-        "article_title",
-        "",
-    )
-
-    lines = [
-        f"<{law_name}>",
-        (
-            f"{format_article_number(article_no)} "
-            f"({article_title})"
-        ),
-    ]
-
-    for paragraph in article.get(
-        "paragraphs",
-        [],
-    ):
-        para_content = paragraph.get(
-            "para_content"
-        )
-
-        if para_content:
-            lines.append(
-                para_content
-            )
-
-        for item in paragraph.get(
-            "items",
-            [],
-        ):
-            item_content = item.get(
-                "item_content"
-            )
-
-            if item_content:
-                lines.append(
-                    f"    {item_content}"
-                )
-
-            for sub_item in item.get(
-                "sub_items",
-                [],
-            ):
-                sub_content = sub_item.get(
-                    "sub_content"
-                )
-
-                if sub_content:
-                    lines.append(
-                        f"        {sub_content}"
-                    )
-
-    return "\n".join(
-        lines
-    )
-
-
-# =========================================================
-# 사용자 질문에서 법령 + 조문 추출
+# 사용자 질문에서 명시된 법령 + 조문 추출
 # =========================================================
 
 def extract_explicit_law_refs(
     query: str,
 ):
     """
-    예:
-
     형법 제347조(사기죄)
 
     ->
 
     {
-        "law_name": "형법",
-        "article_no": "347",
-        "title_hint": "사기죄"
+        law_name: 형법,
+        article_no: 347,
+        title_hint: 사기죄
     }
     """
 
     refs = []
 
-    law_names = get_law_names()
-
-    for law_name in law_names:
+    for law_name in get_law_names():
 
         if law_name not in query:
             continue
@@ -341,7 +238,9 @@ def extract_explicit_law_refs(
             pattern,
             query,
         ):
-            article_no = match.group(1)
+            article_no = (
+                match.group(1)
+            )
 
             if match.group(2):
                 article_no += (
@@ -350,13 +249,44 @@ def extract_explicit_law_refs(
 
             refs.append(
                 {
-                    "law_name": law_name,
-                    "article_no": article_no,
-                    "title_hint": match.group(3),
+                    "law_name":
+                        law_name,
+
+                    "article_no":
+                        article_no,
+
+                    "title_hint":
+                        match.group(3),
                 }
             )
 
     return refs
+
+
+# =========================================================
+# SQLite Row -> RAG Source
+# =========================================================
+
+def row_to_source(
+    row,
+    source_type: str,
+):
+    return {
+        "law_name":
+            row["law_name"],
+
+        "article":
+            row["article_display"],
+
+        "article_title":
+            row["article_title"],
+
+        "content":
+            row["content"],
+
+        "source_type":
+            source_type,
+    }
 
 
 # =========================================================
@@ -367,162 +297,94 @@ def exact_search_laws(
     query: str,
 ):
     """
-    사용자가 직접 입력한 법령/조문만 정확 조회한다.
+    사용자가 직접 명시한 법령/조문을 검색한다.
 
-    Query Rewriter가 생성한 추정 조문은 사용하지 않는다.
+    예:
+    형법 제347조
+    근로기준법 제43조의2
     """
 
-    refs = extract_explicit_law_refs(
-        query
+    refs = (
+        extract_explicit_law_refs(
+            query
+        )
     )
 
-    law_index = get_law_index()
+    if not refs:
+        return []
+
+    db = get_search_connection()
 
     results = []
 
-    normalized_query = normalize_title(
-        query
-    )
+    try:
+        for ref in refs:
 
-    for ref in refs:
+            rows = db.execute(
+                """
+                SELECT
+                    law_name,
+                    article_no,
+                    article_display,
+                    article_title,
+                    content
 
-        law_name = ref[
-            "law_name"
-        ]
+                FROM articles
 
-        target_no = ref[
-            "article_no"
-        ]
+                WHERE law_name = ?
+                  AND article_no = ?
 
-        title_hint = normalize_title(
-            ref.get(
-                "title_hint"
-            )
-        )
+                ORDER BY source_order
 
-        law = law_index.get(
-            law_name
-        )
+                LIMIT 10
+                """,
+                (
+                    ref["law_name"],
+                    ref["article_no"],
+                ),
+            ).fetchall()
 
-        if not law:
-            continue
+            if not rows:
+                continue
 
-        article_candidates = []
-
-        for article in get_normalized_articles(
-            law
-        ):
-            article_no = get_article_no(
-                article
-            )
-
-            if article_no == target_no:
-                article_candidates.append(
-                    article
-                )
-
-        if not article_candidates:
-            continue
-
-        # 제목 힌트가 있을 경우
-        if title_hint:
-
-            title_matches = [
-                article
-                for article
-                in article_candidates
-                if normalize_title(
-                    article.get(
-                        "article_title"
+            title_hint = (
+                normalize_title(
+                    ref.get(
+                        "title_hint"
                     )
                 )
-                == title_hint
-            ]
+            )
 
-            if title_matches:
-                article_candidates = (
-                    title_matches
-                )
+            selected_rows = rows
 
-        # 같은 번호 후보가 여러 개일 경우
-        elif len(
-            article_candidates
-        ) > 1:
+            if title_hint:
 
-            query_matches = []
-
-            for article in article_candidates:
-
-                article_title = (
-                    normalize_title(
-                        article.get(
+                title_matches = [
+                    row
+                    for row in rows
+                    if normalize_title(
+                        row[
                             "article_title"
-                        )
+                        ]
+                    )
+                    == title_hint
+                ]
+
+                if title_matches:
+                    selected_rows = (
+                        title_matches
+                    )
+
+            for row in selected_rows:
+                results.append(
+                    row_to_source(
+                        row,
+                        "exact",
                     )
                 )
 
-                if (
-                    article_title
-                    and article_title
-                    in normalized_query
-                ):
-                    query_matches.append(
-                        article
-                    )
-
-            if query_matches:
-
-                query_matches.sort(
-                    key=lambda article: len(
-                        normalize_title(
-                            article.get(
-                                "article_title"
-                            )
-                        )
-                    ),
-                    reverse=True,
-                )
-
-                article_candidates = [
-                    query_matches[0]
-                ]
-
-            else:
-                article_candidates = [
-                    article_candidates[0]
-                ]
-
-        for article in article_candidates:
-
-            article_no = get_article_no(
-                article
-            )
-
-            article_title = article.get(
-                "article_title",
-                "",
-            )
-
-            results.append(
-                {
-                    "law_name": law_name,
-                    "article": (
-                        format_article_number(
-                            article_no
-                        )
-                    ),
-                    "article_title": (
-                        article_title
-                    ),
-                    "content": (
-                        format_exact_article(
-                            law_name,
-                            article,
-                        )
-                    ),
-                    "source_type": "exact",
-                }
-            )
+    finally:
+        db.close()
 
     return results
 
@@ -531,271 +393,525 @@ def exact_search_laws(
 # Keyword Search
 # =========================================================
 
-KEYWORD_STOPWORDS = {
-    "관련",
-    "법률",
-    "법령",
-    "규정",
-    "절차",
-    "방법",
-    "경우",
-    "확인",
-    "신청",
-    "조사",
-    "기준",
-    "사용자",
-    "질문",
-    "대한민국",
-}
+def split_search_phrases(
+    query: str,
+):
+    """
+    Query Rewriter 출력:
+
+    임금체불, 임금 지급,
+    미지급 임금, 체불임금
+
+    형태를 검색 표현 단위로 분리한다.
+    """
+
+    raw_phrases = re.split(
+        r"[,;\n]+",
+        query,
+    )
+
+    phrases = []
+
+    seen = set()
+
+    for phrase in raw_phrases:
+
+        phrase = phrase.strip()
+
+        phrase = re.sub(
+            r"^[\-\*\d\.\)\s]+",
+            "",
+            phrase,
+        )
+
+        if not phrase:
+            continue
+
+        key = compact_text(
+            phrase
+        )
+
+        if (
+            not key
+            or key in seen
+        ):
+            continue
+
+        seen.add(key)
+
+        phrases.append(
+            phrase
+        )
+
+        if len(phrases) >= 10:
+            break
+
+    if not phrases:
+        query = query.strip()
+
+        if query:
+            phrases.append(
+                query
+            )
+
+    return phrases
 
 
-@lru_cache(maxsize=128)
+def extract_search_terms(
+    phrase: str,
+):
+    """
+    FTS에 안전하게 넣을 수 있는 검색어만 추출한다.
+    """
+
+    terms = re.findall(
+        r"[0-9A-Za-z가-힣]+",
+        phrase,
+    )
+
+    cleaned = []
+
+    seen = set()
+
+    for term in terms:
+
+        term = normalize_title(
+            term
+        )
+
+        if not term:
+            continue
+
+        # 한 글자 검색어는 노이즈가 너무 많으므로 제외.
+        if (
+            len(term) < 2
+            and not term.isdigit()
+        ):
+            continue
+
+        if term in seen:
+            continue
+
+        seen.add(term)
+
+        cleaned.append(
+            term
+        )
+
+        if len(cleaned) >= 6:
+            break
+
+    return cleaned
+
+
+def build_fts_query(
+    terms,
+    operator="AND",
+):
+    if not terms:
+        return ""
+
+    return (
+        f" {operator} ".join(
+            f"{term}*"
+            for term in terms
+        )
+    )
+
+
+def calculate_title_priority(
+    article_title: str,
+    phrase: str,
+):
+    """
+    검색 결과 우선순위.
+
+    0 = 제목 완전 일치
+    1 = 제목에 검색 표현 포함
+    2 = 검색 단어가 제목에 포함
+    3 = 본문 등에만 등장
+    """
+
+    title = normalize_title(
+        article_title
+    )
+
+    phrase_normalized = (
+        normalize_title(
+            phrase
+        )
+    )
+
+    if (
+        title
+        and title
+        == phrase_normalized
+    ):
+        return 0
+
+    if (
+        title
+        and phrase_normalized
+        and phrase_normalized
+        in title
+    ):
+        return 1
+
+    terms = extract_search_terms(
+        phrase
+    )
+
+    for term in terms:
+        if term in title:
+            return 2
+
+    return 3
+
+
 def keyword_search_laws(
     query: str,
     k: int = 12,
 ):
     """
-    법률 표현을 이용한 문자열 기반 검색.
+    SQLite FTS5 + 조문 제목 직접 검색.
+
+    한국어 띄어쓰기 차이도 보완한다.
 
     예:
-    - 임금 지급
-    - 미지급 임금
-    - 재산분할
-    - 보증금 반환
+    임금지급
+        ->
+    임금 지급
+
+    재산분할
+        ->
+    재산분할청구권
     """
 
-    dataset = get_law_dataset()
-
-    phrases = [
-        phrase.strip()
-        for phrase in re.split(
-            r"[,\n]",
-            query,
-        )
-        if len(
-            phrase.strip()
-        ) >= 2
-    ]
-
-    tokens = {
-        token
-        for token in re.findall(
-            r"[가-힣A-Za-z0-9]+",
-            query,
-        )
-        if (
-            len(token) >= 2
-            and token
-            not in KEYWORD_STOPWORDS
-        )
-    }
-
-    # 공백을 제거한 전체 Query
-    normalized_query = re.sub(
-        r"\s+",
-        "",
-        query,
+    phrases = split_search_phrases(
+        query
     )
 
-    scored_results = []
+    if not phrases:
+        return []
 
-    for law in dataset:
+    db = get_search_connection()
 
-        law_name = law.get(
-            "law_name",
-            "",
+    candidates = {}
+
+    def add_candidate(
+        row,
+        phrase,
+        score=0.0,
+    ):
+        article_id = row["id"]
+
+        priority = (
+            calculate_title_priority(
+                row["article_title"],
+                phrase,
+            )
         )
 
-        normalized_law_name = re.sub(
-            r"\s+",
-            "",
-            law_name,
+        if article_id not in candidates:
+
+            candidates[
+                article_id
+            ] = {
+                "law_name":
+                    row["law_name"],
+
+                "article_no":
+                    row["article_no"],
+
+                "article_title":
+                    row["article_title"],
+
+                "content":
+                    row["content"],
+
+                "match_count":
+                    0,
+
+                "best_priority":
+                    99,
+
+                "best_score":
+                    float("inf"),
+            }
+
+        candidate = (
+            candidates[
+                article_id
+            ]
         )
 
-        for article in get_normalized_articles(
-            law
-        ):
-            article_no = get_article_no(
-                article
-            )
+        candidate[
+            "match_count"
+        ] += 1
 
-            if not article_no:
-                continue
+        candidate[
+            "best_priority"
+        ] = min(
+            candidate[
+                "best_priority"
+            ],
+            priority,
+        )
 
-            article_title = (
-                article.get(
-                    "article_title",
-                    "",
-                )
-                or ""
-            )
+        candidate[
+            "best_score"
+        ] = min(
+            candidate[
+                "best_score"
+            ],
+            score,
+        )
 
-            normalized_article_title = re.sub(
-                r"\s+",
-                "",
-                article_title,
-            )
+    try:
+        for phrase in phrases:
 
-            content = format_exact_article(
-                law_name,
-                article,
-            )
-
-            searchable_text = (
-                f"{law_name} "
-                f"{article_title} "
-                f"{content}"
-            )
-
-            normalized_text = re.sub(
-                r"\s+",
-                "",
-                searchable_text,
-            )
-
-            score = 0
-
-            substantive_match = False
-
-            # -------------------------------------------------
-            # 조문 제목 자체가 검색 질의 안에 포함되는 경우
+            # =================================================
+            # 1. 조문 제목 직접 검색
             #
-            # 예:
-            # 조문명: 임금 지급
-            # Query: 임금지급청구, 임금지급지연
+            # 공백 제거 후 비교한다.
             #
-            # -> 강한 가산점
-            # -------------------------------------------------
+            # 임금지급
+            # 임금 지급
+            #
+            # 둘을 같은 표현으로 처리한다.
+            # =================================================
 
-            if (
-                normalized_article_title
-                and len(
-                    normalized_article_title
-                ) >= 2
-                and normalized_article_title
-                in normalized_query
-            ):
-                score += 30
-
-                substantive_match = True
-
-            # -------------------------------------------------
-            # 핵심 구문 일치
-            # -------------------------------------------------
-
-            for phrase in phrases:
-
-                normalized_phrase = re.sub(
-                    r"\s+",
-                    "",
-                    phrase,
+            normalized_phrase = (
+                compact_text(
+                    phrase
                 )
+            )
 
-                if not normalized_phrase:
-                    continue
+            if normalized_phrase:
 
-                # 법령명 자체만으로 높은 점수를 주지 않음
-                if (
-                    normalized_phrase
-                    == normalized_law_name
-                ):
-                    continue
+                title_rows = db.execute(
+                    """
+                    SELECT
+                        id,
+                        law_name,
+                        article_no,
+                        article_title,
+                        content
 
-                if (
-                    normalized_phrase
-                    in normalized_text
-                ):
-                    score += 10
+                    FROM articles
 
-                    substantive_match = True
+                    WHERE
+                        REPLACE(
+                            article_title,
+                            ' ',
+                            ''
+                        ) LIKE ?
 
-                    # 조문 제목에 직접 포함되면 추가 점수
-                    if (
-                        normalized_phrase
-                        in normalized_article_title
-                    ):
-                        score += 8
+                    ORDER BY
+                        CASE
+                            WHEN REPLACE(
+                                article_title,
+                                ' ',
+                                ''
+                            ) = ?
+                            THEN 0
 
-            # -------------------------------------------------
-            # 개별 키워드 일치
-            # -------------------------------------------------
+                            ELSE 1
+                        END,
 
-            for token in tokens:
-
-                # 법령명 자체는 건너뜀
-                if token == law_name:
-                    continue
-
-                if token in article_title:
-                    score += 7
-
-                    substantive_match = True
-
-                elif token in searchable_text:
-                    score += 1
-
-                    substantive_match = True
-
-            # 실제 쟁점과 관련된 내용이 있는 경우에만
-            # 법령명 일치 보너스
-            if (
-                substantive_match
-                and law_name in query
-            ):
-                score += 2
-
-            if score <= 0:
-                continue
-
-            scored_results.append(
-                (
-                    score,
-                    {
-                        "law_name": law_name,
-                        "article": (
-                            format_article_number(
-                                article_no
-                            )
-                        ),
-                        "article_title": (
+                        LENGTH(
                             article_title
-                        ),
-                        "content": content,
-                        "source_type": "keyword",
-                    },
+                        ) ASC
+
+                    LIMIT 30
+                    """,
+                    (
+                        f"%{normalized_phrase}%",
+                        normalized_phrase,
+                    ),
+                ).fetchall()
+
+                for row in title_rows:
+
+                    add_candidate(
+                        row,
+                        phrase,
+                        score=-100.0,
+                    )
+
+            # =================================================
+            # 2. FTS5 검색
+            # =================================================
+
+            terms = extract_search_terms(
+                phrase
+            )
+
+            if not terms:
+                continue
+
+            fts_query = (
+                build_fts_query(
+                    terms,
+                    operator="AND",
                 )
             )
 
-    # 점수 높은 순
-    scored_results.sort(
-        key=lambda item: item[0],
-        reverse=True,
+            try:
+                rows = db.execute(
+                    """
+                    SELECT
+                        rowid AS id,
+                        law_name,
+                        article_no,
+                        article_title,
+                        content,
+
+                        bm25(
+                            articles_fts,
+                            3.0,
+                            1.0,
+                            8.0,
+                            1.0
+                        ) AS score
+
+                    FROM articles_fts
+
+                    WHERE
+                        articles_fts
+                        MATCH ?
+
+                    ORDER BY
+                        score ASC
+
+                    LIMIT 30
+                    """,
+                    (
+                        fts_query,
+                    ),
+                ).fetchall()
+
+            except sqlite3.OperationalError:
+                rows = []
+
+            # =================================================
+            # AND 결과가 없으면 OR 검색
+            # =================================================
+
+            if (
+                not rows
+                and len(terms) > 1
+            ):
+                fallback_query = (
+                    build_fts_query(
+                        terms,
+                        operator="OR",
+                    )
+                )
+
+                try:
+                    rows = db.execute(
+                        """
+                        SELECT
+                            rowid AS id,
+                            law_name,
+                            article_no,
+                            article_title,
+                            content,
+
+                            bm25(
+                                articles_fts,
+                                3.0,
+                                1.0,
+                                8.0,
+                                1.0
+                            ) AS score
+
+                        FROM articles_fts
+
+                        WHERE
+                            articles_fts
+                            MATCH ?
+
+                        ORDER BY
+                            score ASC
+
+                        LIMIT 20
+                        """,
+                        (
+                            fallback_query,
+                        ),
+                    ).fetchall()
+
+                except sqlite3.OperationalError:
+                    rows = []
+
+            for row in rows:
+
+                add_candidate(
+                    row,
+                    phrase,
+                    score=row["score"],
+                )
+
+    finally:
+        db.close()
+
+    # =====================================================
+    # 최종 Ranking
+    #
+    # 1. 조문 제목 직접 일치
+    # 2. 여러 검색 표현에서 반복 등장
+    # 3. BM25
+    # =====================================================
+
+    ranked = sorted(
+        candidates.values(),
+        key=lambda item: (
+            item[
+                "best_priority"
+            ],
+
+            -item[
+                "match_count"
+            ],
+
+            item[
+                "best_score"
+            ],
+        ),
     )
 
     results = []
 
-    seen = set()
-
-    for score, source in scored_results:
-
-        key = (
-            source["law_name"],
-            source["article"],
-        )
-
-        if key in seen:
-            continue
-
-        seen.add(
-            key
-        )
+    for item in ranked[:k]:
 
         results.append(
-            source
-        )
+            {
+                "law_name":
+                    item["law_name"],
 
-        if len(results) >= k:
-            break
+                "article":
+                    format_article_number(
+                        item[
+                            "article_no"
+                        ]
+                    ),
+
+                "article_title":
+                    item[
+                        "article_title"
+                    ],
+
+                "content":
+                    item[
+                        "content"
+                    ],
+
+                "source_type":
+                    "keyword",
+            }
+        )
 
     return results
 
@@ -807,141 +923,266 @@ def keyword_search_laws(
 @lru_cache(maxsize=1)
 def get_vector_db():
     """
-    임베딩 모델과 ChromaDB를 최초 1회만 로드한다.
+    기존 Chroma 벡터 DB는 그대로 사용한다.
     """
 
-    embeddings = HuggingFaceEmbeddings(
-        model_name=(
-            "jhgan/"
-            "ko-sroberta-multitask"
-        ),
-        model_kwargs={
-            "device": "cpu",
-        },
-        encode_kwargs={
-            "normalize_embeddings": True,
-        },
+    embeddings = (
+        HuggingFaceEmbeddings(
+            model_name=(
+                "jhgan/"
+                "ko-sroberta-multitask"
+            ),
+            model_kwargs={
+                "device": "cpu",
+            },
+            encode_kwargs={
+                "normalize_embeddings":
+                    True,
+            },
+        )
     )
 
     return Chroma(
         persist_directory=str(
-            DB_PATH
+            VECTOR_DB_PATH
         ),
-        embedding_function=embeddings,
+        embedding_function=(
+            embeddings
+        ),
     )
 
 
 # =========================================================
-# Vector Search 결과의 조문번호 추출
+# Vector 문서 정보 추출
 # =========================================================
 
-def extract_article(
+def extract_article_number_from_content(
     content: str,
 ):
-    """
-    제347조
-    제347조의2
-
-    형태를 추출한다.
-    """
-
     match = re.search(
-        r"제\s*\d+\s*조"
-        r"(?:의\s*\d+)?",
-        content,
-    )
-
-    if match:
-
-        return re.sub(
-            r"\s+",
-            "",
-            match.group(),
-        )
-
-    return None
-
-
-# =========================================================
-# Vector 결과를 JSON 원본과 다시 연결
-# =========================================================
-
-@lru_cache(maxsize=512)
-def resolve_article_from_dataset(
-    law_name: str,
-    article_number: str,
-):
-    """
-    Vector Search 결과의
-
-    법령명 + 조문번호
-
-    를 이용해 JSON 원본에서
-    정확한 조문 제목과 본문을 가져온다.
-
-    예:
-
-    근로기준법 + 제43조
-
-    ->
-
-    임금 지급
-    """
-
-    if (
-        not law_name
-        or not article_number
-    ):
-        return None
-
-    match = re.match(
-        r"제(\d+)조(?:의(\d+))?",
-        article_number,
+        r"제\s*(\d+)\s*조"
+        r"(?:의\s*(\d+))?",
+        content or "",
     )
 
     if not match:
-        return None
+        return ""
 
-    target_no = match.group(1)
+    article_no = match.group(1)
 
     if match.group(2):
-        target_no += (
+        article_no += (
             f"의{match.group(2)}"
         )
 
-    law = get_law_index().get(
-        law_name
+    return article_no
+
+
+def extract_article_title_from_content(
+    content: str,
+):
+    match = re.search(
+        r"제\s*\d+\s*조"
+        r"(?:의\s*\d+)?"
+        r"\s*\(([^)]*)\)",
+        content or "",
     )
 
-    if not law:
-        return None
+    if not match:
+        return ""
 
-    for article in get_normalized_articles(
-        law
-    ):
-        article_no = get_article_no(
-            article
+    return (
+        match.group(1)
+        .strip()
+    )
+
+
+# =========================================================
+# Vector 결과 -> SQLite의 정규화된 조문으로 연결
+# =========================================================
+
+def resolve_vector_source(
+    db,
+    doc,
+):
+    law_name = (
+        doc.metadata.get(
+            "law_name"
+        )
+        or doc.metadata.get(
+            "title"
+        )
+        or "관련 법령"
+    )
+
+    law_name = str(
+        law_name
+    ).strip()
+
+    raw_article_no = (
+        doc.metadata.get(
+            "article_no"
+        )
+    )
+
+    if raw_article_no is None:
+        raw_article_no = (
+            extract_article_number_from_content(
+                doc.page_content
+            )
         )
 
-        if article_no != target_no:
-            continue
+    raw_article_no = (
+        normalize_article_number(
+            raw_article_no
+        )
+    )
 
+    vector_title = (
+        extract_article_title_from_content(
+            doc.page_content
+        )
+    )
+
+    if (
+        not law_name
+        or not raw_article_no
+    ):
         return {
-            "article_title": (
-                article.get(
-                    "article_title",
-                    "",
-                )
-            ),
-            "content": (
-                format_exact_article(
-                    law_name,
-                    article,
-                )
-            ),
+            "law_name":
+                law_name,
+
+            "article":
+                format_article_number(
+                    raw_article_no
+                ),
+
+            "article_title":
+                vector_title,
+
+            "content":
+                doc.page_content,
+
+            "source_type":
+                "vector",
         }
 
-    return None
+    rows = db.execute(
+        """
+        SELECT
+            law_name,
+            source_article_no,
+            article_no,
+            article_display,
+            article_title,
+            content,
+            source_order
+
+        FROM articles
+
+        WHERE law_name = ?
+          AND (
+                source_article_no = ?
+                OR article_no = ?
+              )
+
+        ORDER BY source_order
+        """,
+        (
+            law_name,
+            raw_article_no,
+            raw_article_no,
+        ),
+    ).fetchall()
+
+    if not rows:
+        return {
+            "law_name":
+                law_name,
+
+            "article":
+                format_article_number(
+                    raw_article_no
+                ),
+
+            "article_title":
+                vector_title,
+
+            "content":
+                doc.page_content,
+
+            "source_type":
+                "vector",
+        }
+
+    # 가지번호가 원본에서 손상된 경우
+    # Chroma 문서의 조문 제목으로 정확한 조문을 찾는다.
+    normalized_vector_title = (
+        normalize_title(
+            vector_title
+        )
+    )
+
+    if normalized_vector_title:
+
+        for row in rows:
+
+            if (
+                normalize_title(
+                    row[
+                        "article_title"
+                    ]
+                )
+                == normalized_vector_title
+            ):
+                return row_to_source(
+                    row,
+                    "vector",
+                )
+
+    # 제목이 정확히 추출되지 않은 경우
+    # Chroma 본문에 조문 제목이 포함되는지 검사한다.
+    compact_document = (
+        compact_text(
+            doc.page_content
+        )
+    )
+
+    for row in rows:
+
+        title = compact_text(
+            row[
+                "article_title"
+            ]
+        )
+
+        if (
+            title
+            and title
+            in compact_document
+        ):
+            return row_to_source(
+                row,
+                "vector",
+            )
+
+    # 이미 정상적인 가지번호가 있는 경우 우선.
+    for row in rows:
+
+        if (
+            row["article_no"]
+            == raw_article_no
+        ):
+            return row_to_source(
+                row,
+                "vector",
+            )
+
+    # 마지막 fallback.
+    return row_to_source(
+        rows[0],
+        "vector",
+    )
 
 
 # =========================================================
@@ -951,16 +1192,18 @@ def resolve_article_from_dataset(
 def search_laws(
     question: str,
     category: str,
-    k: int = 8,
+    k: int = 4,
 ):
     """
-    ChromaDB 기반 의미 검색.
+    기존 ChromaDB MMR 검색.
 
-    MMR:
-    관련성 + 문서 다양성을 함께 고려한다.
+    단, 검색 결과의 실제 조문 내용과
+    정규화된 가지번호는 SQLite에서 다시 가져온다.
     """
 
-    db = get_vector_db()
+    vector_db = (
+        get_vector_db()
+    )
 
     query = f"""
 법률 분야: {category}
@@ -968,102 +1211,71 @@ def search_laws(
 사용자 질문:
 {question}
 
-이 질문의 핵심 법적 쟁점과 직접적으로 관련된
+이 질문을 해결하는 데 직접적으로 관련된
 대한민국 법령과 조문
 """
 
-    retriever = db.as_retriever(
-        search_type="mmr",
-        search_kwargs={
-            "k": k,
-            "fetch_k": max(
-                20,
-                k * 3,
-            ),
-            "lambda_mult": 0.75,
-        },
+    retriever = (
+        vector_db.as_retriever(
+            search_type="mmr",
+            search_kwargs={
+                "k": k,
+
+                "fetch_k": max(
+                    20,
+                    k * 3,
+                ),
+
+                "lambda_mult":
+                    0.75,
+            },
+        )
     )
 
     docs = retriever.invoke(
         query
     )
 
+    db = get_search_connection()
+
     results = []
 
     seen = set()
 
-    for doc in docs:
+    try:
+        for doc in docs:
 
-        law_name = doc.metadata.get(
-            "law_name",
-            doc.metadata.get(
-                "title",
-                "관련 법령",
-            ),
-        )
-
-        article = extract_article(
-            doc.page_content
-        )
-
-        key = (
-            law_name.strip(),
-            article
-            or doc.page_content[:80],
-        )
-
-        if key in seen:
-            continue
-
-        seen.add(
-            key
-        )
-
-        article_title = None
-
-        content = doc.page_content
-
-        # -------------------------------------------------
-        # Vector 결과의 법령명 + 조문번호가 있으면
-        # JSON 원본에서 조문 제목과 정확한 본문을 가져온다.
-        # -------------------------------------------------
-
-        if article:
-
-            resolved = (
-                resolve_article_from_dataset(
-                    law_name,
-                    article,
+            source = (
+                resolve_vector_source(
+                    db,
+                    doc,
                 )
             )
 
-            if resolved:
-
-                article_title = (
-                    resolved[
-                        "article_title"
-                    ]
-                )
-
-                content = (
-                    resolved[
-                        "content"
-                    ]
-                )
-
-        results.append(
-            {
-                "law_name": law_name,
-                "article": article,
-                "article_title": (
-                    article_title
+            key = (
+                source.get(
+                    "law_name",
+                    "",
                 ),
-                "content": content,
-                "source_type": "vector",
-            }
-        )
+                source.get(
+                    "article",
+                    "",
+                ),
+            )
 
-        if len(results) >= k:
-            break
+            if key in seen:
+                continue
+
+            seen.add(key)
+
+            results.append(
+                source
+            )
+
+            if len(results) >= k:
+                break
+
+    finally:
+        db.close()
 
     return results

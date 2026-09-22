@@ -1,21 +1,36 @@
-# 데이터 파일 (Kaggle 업로드용이므로 GitHub에서는 제외)
-*.json
+# 대용량 법률 데이터
+korean_law_full_dataset.json
+korea_all_laws_list.json
+law_data_final.json
+law_data_batch_*.json
 *.csv
 *.xlsx
 
-# 파이썬 및 시스템 설정 파일
+# Python
 __pycache__/
 *.pyc
-.DS_Store
+
+# 가상환경
+.venv/
+.venv-wsl/
+venv/
+
+# 환경변수 / IDE / OS
 .env
 .vscode/
+.DS_Store
 
-# 가상환경 (사용 중이라면)
-venv/
-.env/
-
-# Vector DB 저장 폴더 (용량이 매우 크고 코드가 아니므로 제외)
+# 대용량 Vector DB
 law_db_full/
 
-# 중간 확인용 텍스트 파일 (아까 만드신 결과물)
+# 새 검색용 SQLite DB
+law_search.db
+*.db-wal
+*.db-shm
+
+# 중간 결과물
 perfect_law_book.txt
+
+# Frontend
+frontend/node_modules/
+frontend/dist/

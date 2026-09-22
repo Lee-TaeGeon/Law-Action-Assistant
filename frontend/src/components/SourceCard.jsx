@@ -2,11 +2,13 @@ function SourceCard({ source }) {
   return (
     <details className="source-card">
       <summary>
-        <span>⚖</span>
+        <span>⚖️</span>
 
         <strong>
           {source.law_name}
-          {source.article && ` ${source.article}`}
+
+          {source.article &&
+            ` ${source.article}`}
         </strong>
 
         <span className="source-toggle">
@@ -14,8 +16,19 @@ function SourceCard({ source }) {
         </span>
       </summary>
 
-      <div className="source-content">
-        {source.content}
+      <div className="source-card-content">
+        {source.article_title && (
+          <strong>
+            {source.article_title}
+          </strong>
+        )}
+
+        {source.article_title && (
+          <br />
+        )}
+
+        {source.content ||
+          "법령 내용이 없습니다."}
       </div>
     </details>
   );

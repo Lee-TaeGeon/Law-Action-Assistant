@@ -1,200 +1,482 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import "./App.css";
+
 import ChatInput from "./components/ChatInput";
 import ChatMessage from "./components/ChatMessage";
 import { sendChat } from "./api/chatApi";
-import "./App.css";
+
+const STORAGE_KEY = "law-action-assistant-chats-v1";
 
 function createSessionId() {
-  if (crypto?.randomUUID) {
-    return crypto.randomUUID();
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
   }
 
-  return `session-${Date.now()}-${Math.random()
-    .toString(36)
-    .slice(2)}`;
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function createTitle(question) {
+  const trimmed = question.trim();
+
+  if (trimmed.length <= 28) {
+    return trimmed;
+  }
+
+  return `${trimmed.slice(0, 28)}...`;
+}
+
+function loadSavedConversations() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+
+    if (!saved) {
+      return [];
+    }
+
+    const parsed = JSON.parse(saved);
+
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    console.error("상담 기록 불러오기 실패:", error);
+    return [];
+  }
 }
 
 function App() {
-  const [messages, setMessages] = useState([]);
-  const [sessionId, setSessionId] = useState(() =>
-    createSessionId()
+  const [conversations, setConversations] = useState(
+    loadSavedConversations
   );
+
+  const [activeChatId, setActiveChatId] = useState(null);
+  const [sessionId, setSessionId] = useState(createSessionId);
+  const [messages, setMessages] = useState([]);
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
-  const chatEndRef = useRef(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({
-      behavior: "smooth",
-    });
-  }, [messages, loading, error]);
-
-  const handleSend = async (question) => {
-    if (!question.trim() || loading) {
-      return;
-    }
-
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "user",
-        content: question,
-      },
-    ]);
-
-    setLoading(true);
-    setError("");
-
     try {
-      const data = await sendChat(
-        question,
-        sessionId
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify(conversations)
       );
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: data.answer,
-          category: data.category,
-          sources: data.sources,
-        },
-      ]);
     } catch (error) {
-      console.error(error);
-
-      setError(
-        error.message ||
-          "답변을 불러오는 중 문제가 발생했습니다."
-      );
-    } finally {
-      setLoading(false);
+      console.error("상담 기록 저장 실패:", error);
     }
-  };
+  }, [conversations]);
+
+  const sortedConversations = useMemo(() => {
+    return [...conversations].sort(
+      (a, b) =>
+        new Date(b.updatedAt).getTime() -
+        new Date(a.updatedAt).getTime()
+    );
+  }, [conversations]);
 
   const handleNewChat = () => {
     if (loading) {
       return;
     }
 
+    setActiveChatId(null);
+    setSessionId(createSessionId());
     setMessages([]);
     setError("");
-    setSessionId(
-      createSessionId()
+    setSidebarOpen(false);
+  };
+
+  const handleSelectConversation = (conversation) => {
+    if (loading) {
+      return;
+    }
+
+    setActiveChatId(conversation.id);
+    setSessionId(conversation.sessionId);
+    setMessages(conversation.messages || []);
+    setError("");
+    setSidebarOpen(false);
+  };
+
+  const handleDeleteConversation = (event, conversationId) => {
+    event.stopPropagation();
+
+    if (loading) {
+      return;
+    }
+
+    const shouldDelete = window.confirm(
+      "이 상담 기록을 삭제할까요?"
     );
+
+    if (!shouldDelete) {
+      return;
+    }
+
+    setConversations((prev) =>
+      prev.filter(
+        (conversation) =>
+          conversation.id !== conversationId
+      )
+    );
+
+    if (activeChatId === conversationId) {
+      setActiveChatId(null);
+      setSessionId(createSessionId());
+      setMessages([]);
+      setError("");
+    }
+  };
+
+  const handleSend = async (question) => {
+    const trimmedQuestion = question.trim();
+
+    if (!trimmedQuestion || loading) {
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+
+    const userMessage = {
+      role: "user",
+      content: trimmedQuestion,
+    };
+
+    const currentChatId =
+      activeChatId || sessionId;
+
+    const currentSessionId = sessionId;
+
+    const nextMessages = [
+      ...messages,
+      userMessage,
+    ];
+
+    setMessages(nextMessages);
+
+    setConversations((prev) => {
+      const existing = prev.find(
+        (conversation) =>
+          conversation.id === currentChatId
+      );
+
+      if (existing) {
+        return prev.map((conversation) =>
+          conversation.id === currentChatId
+            ? {
+                ...conversation,
+                messages: nextMessages,
+                updatedAt:
+                  new Date().toISOString(),
+              }
+            : conversation
+        );
+      }
+
+      return [
+        {
+          id: currentChatId,
+          sessionId: currentSessionId,
+          title: createTitle(trimmedQuestion),
+          messages: nextMessages,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        ...prev,
+      ];
+    });
+
+    if (!activeChatId) {
+      setActiveChatId(currentChatId);
+    }
+
+    try {
+      const data = await sendChat(
+        trimmedQuestion,
+        currentSessionId
+      );
+
+      const assistantMessage = {
+        role: "assistant",
+        content: data.answer,
+        category: data.category,
+        sources: data.sources || [],
+      };
+
+      setMessages((prev) => [
+        ...prev,
+        assistantMessage,
+      ]);
+
+      setConversations((prev) =>
+        prev.map((conversation) => {
+          if (
+            conversation.id !== currentChatId
+          ) {
+            return conversation;
+          }
+
+          return {
+            ...conversation,
+            messages: [
+              ...conversation.messages,
+              assistantMessage,
+            ],
+            updatedAt:
+              new Date().toISOString(),
+          };
+        })
+      );
+    } catch (error) {
+      console.error(error);
+
+      setError(
+        error.message ||
+          "상담 중 오류가 발생했습니다."
+      );
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <div className="app">
-      <header className="header">
-        <div className="header-content">
+    <div className="app-shell">
+      {sidebarOpen && (
+        <button
+          className="sidebar-overlay"
+          onClick={() =>
+            setSidebarOpen(false)
+          }
+          aria-label="상담 기록 닫기"
+        />
+      )}
+
+      <aside
+        className={`sidebar ${
+          sidebarOpen ? "sidebar-open" : ""
+        }`}
+      >
+        <div className="sidebar-header">
           <div>
-            <h1>Law Action Assistant</h1>
-            <p>
-              법령 근거 기반 AI 법률 상담
-            </p>
+            <h2>상담 기록</h2>
+            <p>이전 상담을 다시 확인하세요.</p>
+          </div>
+        </div>
+
+        <button
+          className="new-chat-button"
+          onClick={handleNewChat}
+          disabled={loading}
+        >
+          + 새 상담
+        </button>
+
+        <div className="conversation-list">
+          {sortedConversations.length ===
+          0 ? (
+            <div className="conversation-empty">
+              아직 저장된 상담이 없습니다.
+            </div>
+          ) : (
+            sortedConversations.map(
+              (conversation) => (
+                <button
+                  key={conversation.id}
+                  className={`conversation-item ${
+                    activeChatId ===
+                    conversation.id
+                      ? "active"
+                      : ""
+                  }`}
+                  onClick={() =>
+                    handleSelectConversation(
+                      conversation
+                    )
+                  }
+                  disabled={loading}
+                >
+                  <div className="conversation-info">
+                    <span className="conversation-title">
+                      {conversation.title}
+                    </span>
+
+                    <span className="conversation-date">
+                      {new Date(
+                        conversation.updatedAt
+                      ).toLocaleString(
+                        "ko-KR",
+                        {
+                          month: "numeric",
+                          day: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        }
+                      )}
+                    </span>
+                  </div>
+
+                  <span
+                    className="conversation-delete"
+                    role="button"
+                    tabIndex={0}
+                    aria-label="상담 삭제"
+                    onClick={(event) =>
+                      handleDeleteConversation(
+                        event,
+                        conversation.id
+                      )
+                    }
+                    onKeyDown={(event) => {
+                      if (
+                        event.key === "Enter" ||
+                        event.key === " "
+                      ) {
+                        handleDeleteConversation(
+                          event,
+                          conversation.id
+                        );
+                      }
+                    }}
+                  >
+                    ×
+                  </span>
+                </button>
+              )
+            )
+          )}
+        </div>
+      </aside>
+
+      <main className="main-panel">
+        <header className="app-header">
+          <div className="header-left">
+            <button
+              className="sidebar-toggle"
+              onClick={() =>
+                setSidebarOpen(true)
+              }
+              aria-label="상담 기록 열기"
+            >
+              ☰
+            </button>
+
+            <div>
+              <h1>Law Action Assistant</h1>
+              <p>
+                AI 기반 법률 정보 검색 및
+                상담 도우미
+              </p>
+            </div>
           </div>
 
           <button
-            type="button"
-            className="new-chat-button"
+            className="header-new-chat-button"
             onClick={handleNewChat}
             disabled={loading}
           >
-            <span aria-hidden="true">＋</span>
-            새 상담
+            + 새 상담
           </button>
-        </div>
-      </header>
+        </header>
 
-      <main className="chat-container">
-        {messages.length === 0 && !loading && (
-          <div className="empty-state">
-            <div className="empty-icon">
-              ⚖
+        <section className="chat-container">
+          {messages.length === 0 ? (
+            <div className="empty-state">
+              <div className="empty-icon">
+                ⚖️
+              </div>
+
+              <h2>
+                어떤 법률 문제가
+                궁금하신가요?
+              </h2>
+
+              <p>
+                상황을 구체적으로
+                입력하면 관련 법령을
+                검색해 답변합니다.
+              </p>
+
+              <div className="example-questions">
+                <button
+                  onClick={() =>
+                    handleSend(
+                      "회사에서 임금을 두 달째 받지 못했습니다. 어떻게 해야 하나요?"
+                    )
+                  }
+                  disabled={loading}
+                >
+                  임금을 받지 못했어요
+                </button>
+
+                <button
+                  onClick={() =>
+                    handleSend(
+                      "중고거래 사기를 당한 것 같습니다. 어떻게 대응해야 하나요?"
+                    )
+                  }
+                  disabled={loading}
+                >
+                  중고거래 사기를 당했어요
+                </button>
+
+                <button
+                  onClick={() =>
+                    handleSend(
+                      "이혼할 때 재산분할은 어떻게 하나요?"
+                    )
+                  }
+                  disabled={loading}
+                >
+                  이혼 재산분할이 궁금해요
+                </button>
+              </div>
             </div>
+          ) : (
+            <div className="message-list">
+              {messages.map(
+                (message, index) => (
+                  <ChatMessage
+                    key={`${message.role}-${index}`}
+                    message={message}
+                  />
+                )
+              )}
 
-            <h2>
-              어떤 법률 상황이 궁금하신가요?
-            </h2>
+              {loading && (
+                <div className="loading-message">
+                  <div className="loading-avatar">
+                    AI
+                  </div>
 
-            <p>
-              상황을 입력하면 관련 법령을
-              검색하여 근거와 함께
-              답변합니다.
-            </p>
-
-            <div className="example-questions">
-              <span>
-                중고거래 사기를 당했어요
-              </span>
-
-              <span>
-                회사에서 임금을 못 받았어요
-              </span>
-
-              <span>
-                이혼 시 재산분할이 궁금해요
-              </span>
+                  <div className="loading-content">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
-        )}
-
-        {messages.map(
-          (message, index) => (
-            <ChatMessage
-              key={`${message.role}-${index}`}
-              message={message}
-            />
-          )
-        )}
-
-        {loading && (
-          <div className="assistant-message loading-message">
-            <div className="loading-header">
-              <span className="loading-dot" />
-              <span>
-                관련 법령을 분석하고 있습니다
-              </span>
-            </div>
-
-            <div className="loading-bars">
-              <span />
-              <span />
-              <span />
-            </div>
-          </div>
-        )}
+          )}
+        </section>
 
         {error && (
-          <div
-            className="error-message"
-            role="alert"
-          >
-            <strong>
-              답변을 불러오지 못했습니다.
-            </strong>
-
-            <span>
-              {error}
-            </span>
+          <div className="error-message">
+            {error}
           </div>
         )}
 
-        <div ref={chatEndRef} />
+        <ChatInput
+          onSend={handleSend}
+          loading={loading}
+        />
+
+        <footer className="app-footer">
+          본 서비스는 법률 정보 제공을
+          위한 보조 도구이며, 전문적인
+          법률 자문을 대체하지 않습니다.
+        </footer>
       </main>
-
-      <ChatInput
-        onSend={handleSend}
-        loading={loading}
-      />
-
-      <footer className="app-footer">
-        AI가 제공하는 내용은 법률정보
-        참고용이며 개별 사건에 대한
-        법률 자문을 대신하지 않습니다.
-      </footer>
     </div>
   );
 }

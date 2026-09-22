@@ -3,9 +3,7 @@ import { useState } from "react";
 function ChatInput({ onSend, loading }) {
   const [value, setValue] = useState("");
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-
+  const submitQuestion = () => {
     const question = value.trim();
 
     if (!question || loading) {
@@ -16,19 +14,52 @@ function ChatInput({ onSend, loading }) {
     setValue("");
   };
 
-  return (
-    <form className="chat-input" onSubmit={handleSubmit}>
-      <textarea
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        placeholder="법률 상황을 입력해주세요."
-        rows={3}
-      />
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    submitQuestion();
+  };
 
-      <button type="submit" disabled={loading}>
-        {loading ? "분석 중..." : "질문하기"}
-      </button>
-    </form>
+  const handleKeyDown = (e) => {
+    if (
+      e.key === "Enter" &&
+      !e.shiftKey
+    ) {
+      e.preventDefault();
+      submitQuestion();
+    }
+  };
+
+  return (
+    <div className="chat-input-wrapper">
+      <form
+        className="chat-input-container"
+        onSubmit={handleSubmit}
+      >
+        <textarea
+          className="chat-input"
+          value={value}
+          onChange={(e) =>
+            setValue(e.target.value)
+          }
+          onKeyDown={handleKeyDown}
+          placeholder="법률 상황을 입력해주세요."
+          rows={2}
+          disabled={loading}
+        />
+
+        <button
+          className="send-button"
+          type="submit"
+          disabled={
+            loading || !value.trim()
+          }
+        >
+          {loading
+            ? "분석 중..."
+            : "질문하기"}
+        </button>
+      </form>
+    </div>
   );
 }
 

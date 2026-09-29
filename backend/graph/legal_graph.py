@@ -4,7 +4,7 @@ from functools import lru_cache
 from typing import TypedDict, List, Dict
 
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -40,40 +40,28 @@ class AgentState(TypedDict, total=False):
 # =========================================================
 
 @lru_cache(maxsize=1)
+@lru_cache(maxsize=1)
 def get_fast_llm():
-    """
-    분류 / 검색어 생성 / Reranking용 저비용 모델
-    """
-    api_key = os.getenv("OPENAI_API_KEY")
-
-    if not api_key:
-        raise RuntimeError(
-            "OPENAI_API_KEY가 설정되어 있지 않습니다."
-        )
-
-    return ChatOpenAI(
-        model="gpt-5-nano",
-        api_key=api_key,
+    return ChatOllama(
+        model=os.getenv("OLLAMA_FAST_MODEL", "qwen3:8b"),
+        base_url=os.getenv(
+            "OLLAMA_BASE_URL",
+            "http://localhost:11434"
+        ),
+        temperature=0,
     )
 
 
 @lru_cache(maxsize=1)
 def get_answer_llm():
-    """
-    최종 법률 답변 생성용 모델
-    """
-    api_key = os.getenv("OPENAI_API_KEY")
-
-    if not api_key:
-        raise RuntimeError(
-            "OPENAI_API_KEY가 설정되어 있지 않습니다."
-        )
-
-    return ChatOpenAI(
-        model="gpt-5.6-luna",
-        api_key=api_key,
+    return ChatOllama(
+        model=os.getenv("OLLAMA_ANSWER_MODEL", "qwen3:8b"),
+        base_url=os.getenv(
+            "OLLAMA_BASE_URL",
+            "http://localhost:11434"
+        ),
+        temperature=0,
     )
-
 
 # =========================================================
 # 1. 질문 분야 분류

@@ -1,122 +1,140 @@
 # ⚖️ Law Action Assistant
 
-> 대한민국 법령 데이터를 기반으로 사용자의 법률 질문을 분석하고, 관련 법령을 검색하여 근거 중심의 답변을 제공하는 AI 법률 정보 서비스
+대한민국 법령 데이터를 기반으로 사용자의 법률 질문을 분석하고,  
+관련 법령을 검색하여 근거와 함께 답변을 제공하는 **RAG 기반 법률 AI Agent**입니다.
 
-**Law Action Assistant**는 단순한 법률 챗봇이 아니라,
+단순한 LLM 질의응답이 아니라,
 
-**질문 분류 → 검색 질의 생성 → 하이브리드 법령 검색 → Reranking → 근거 기반 답변 생성**
+**질문 분류 → 검색 질의 재작성 → Hybrid Retrieval → LLM Reranking → 근거 기반 답변 생성**
 
-과정을 LangGraph Workflow로 구성한 RAG 기반 AI 서비스입니다.
+과정을 LangGraph로 구성했습니다.
 
-React와 FastAPI를 분리한 웹서비스 구조로 리팩토링했으며,  
-SQLite FTS5와 ChromaDB를 함께 사용하여 키워드 검색과 의미 기반 검색을 결합했습니다.
+개발 환경에서는 **Ollama Local**, 배포 환경에서는 **Ollama Cloud**를 사용하여  
+OpenAI API에 의존하지 않고 Local / Cloud LLM 환경을 분리했습니다.
 
----
-
-# 🌐 Live Demo
-
-## Frontend
-
-https://law-action-assistant.vercel.app
-
-## Backend API
-
-https://law-action-assistant-production.up.railway.app
-
-## Swagger
-
-https://law-action-assistant-production.up.railway.app/docs
+> ⚠️ 본 프로젝트는 법률 정보 검색 및 AI 기술 데모를 목적으로 제작되었습니다.  
+> 제공되는 답변은 법률 자문을 대체하지 않으며 실제 사건에 대한 법적 판단은 달라질 수 있습니다.
 
 ---
 
-# 🚀 Project Overview
+## 🌐 Architecture
 
-법률 질문에서는 단순 Vector Search만으로 정확한 조문을 찾기 어렵습니다.
+```mermaid
+flowchart TD
 
-예를 들어 사용자가 다음과 같이 질문할 수 있습니다.
+    U[사용자]
+    F[React + Vite]
+    B[FastAPI]
+    C[질문 분야 분류]
+    Q[Query Rewrite]
+    R[Hybrid Retrieval]
+    E[Exact Search]
+    K[Keyword Search / SQLite FTS5]
+    V[Vector Search / ChromaDB]
+    RR[LLM Reranker]
+    G[Answer Generator]
+    O[Ollama]
+    M[LLM]
+    D[(법령 데이터)]
 
-```text
-회사에서 임금을 두 달째 받지 못했습니다.
-어떻게 해야 하나요?
+    U --> F
+    F --> B
+    B --> C
+    C --> Q
+    Q --> R
+
+    R --> E
+    R --> K
+    R --> V
+
+    D --> E
+    D --> K
+    D --> V
+
+    E --> RR
+    K --> RR
+    V --> RR
+
+    RR --> G
+    G --> O
+    O --> M
+    M --> G
+    G --> B
+    B --> F
 ```
 
-단순 의미 유사도 검색만 사용하는 경우 임금이라는 단어가 포함된 특수 법률이나 적용 대상이 다른 법령이 함께 검색될 수 있습니다.
-
-Law Action Assistant는 이를 개선하기 위해 여러 검색 방식을 조합합니다.
+### 개발 환경
 
 ```text
-사용자 질문
-    ↓
-Classifier
-    ↓
-Query Rewriter
-    ↓
-┌──────────────────────────────┐
-│ Exact Search                 │
-│ SQLite FTS5 / Keyword Search │
-│ Chroma Vector Search         │
-└──────────────────────────────┘
-    ↓
-후보 병합
-    ↓
-Scope / Data Filter
-    ↓
-LLM Reranker
-    ↓
-Grounded Generator
-    ↓
-최종 답변 + 법령 출처
+React
+  ↓
+FastAPI
+  ↓
+LangGraph
+  ↓
+Hybrid RAG
+  ↓
+Ollama Local
+  ↓
+qwen3:8b
+  ↓
+Local GPU
 ```
+
+### 배포 환경
+
+```text
+Vercel
+  ↓
+Railway
+  ↓
+FastAPI
+  ↓
+LangGraph + RAG
+  ↓
+Ollama Cloud
+  ↓
+gpt-oss:20b
+```
+
+배포 환경에서는 로컬 PC가 꺼져 있어도  
+Railway Backend와 Ollama Cloud를 통해 AI 응답을 생성할 수 있습니다.
 
 ---
 
-# 🧠 LangGraph Workflow
+# ✨ 주요 기능
 
-현재 AI Pipeline은 다음 5단계로 구성됩니다.
+## 1. 법률 질문 분야 자동 분류
+
+사용자의 질문을 다음 분야 중 하나로 분류합니다.
+
+- 민사
+- 형사
+- 가사
+- 노동
+- 행정
+- 기타
+
+예시:
 
 ```text
-Classifier
-    ↓
-Query Rewriter
-    ↓
-Researcher
-    ↓
-Reranker
-    ↓
-Generator
+돈을 보냈는데 판매자가 물건을 보내지 않고 연락을 끊었습니다.
 ```
 
-## 1. Classifier
+→ `형사`
 
-사용자의 질문이 어떤 법률 분야에 해당하는지 분류합니다.
+분류 결과는 이후 법령 검색 범위를 조정하는 데 활용됩니다.
+
+---
+
+## 2. Query Rewrite
+
+사용자의 자연어 질문을 법령 검색에 적합한 핵심 법률 표현으로 변환합니다.
 
 예:
 
 ```text
-민사
-형사
-노동
-가사
-교통
-기타
-```
-
-사용 모델:
-
-```text
-gpt-5-nano
-```
-
----
-
-## 2. Query Rewriter
-
-사용자의 자연어 질문을 법령 검색에 적합한 형태로 변환합니다.
-
-예:
-
-```text
-회사에서 월급을 두 달째 못 받았어요
+월급을 받지 못했습니다.
 ```
 
 ↓
@@ -125,291 +143,288 @@ gpt-5-nano
 임금
 임금 지급
 임금체불
-근로기준법
+체불임금
 ```
 
-사용 모델:
-
-```text
-gpt-5-nano
-```
+LLM이 임의로 조문 번호를 생성하지 않도록 제한하고,  
+실체적인 권리·의무·책임에 해당하는 법률 용어를 우선 생성합니다.
 
 ---
 
-## 3. Researcher
+## 3. Hybrid Retrieval
 
-세 가지 방식으로 법령을 검색합니다.
+한 가지 검색 방식에 의존하지 않고 여러 검색 결과를 결합합니다.
 
 ### Exact Search
 
-사용자가 법령명과 조문을 명확하게 입력한 경우 정확하게 검색합니다.
+사용자가 직접 입력한 법령명이나 조문을 검색합니다.
 
-```text
-형법 제347조
-민법 제839조의2
-```
+### Keyword Search
 
-### Keyword / FTS5 Search
-
-SQLite FTS5를 이용해 법령명, 조문명, 본문을 검색합니다.
+SQLite FTS5 기반으로 법령 본문과 조문명을 검색합니다.
 
 ### Vector Search
 
-`jhgan/ko-sroberta-multitask` 모델로 질문을 Embedding한 뒤  
-ChromaDB에서 의미적으로 유사한 법령을 검색합니다.
-
-Vector 검색 결과에는 MMR 방식도 적용하여 검색 결과의 관련성과 다양성을 함께 고려합니다.
-
----
-
-## 4. Reranker
-
-검색된 후보를 그대로 Generator에 넘기지 않고, 질문과 실제 관련성이 높은 조문을 다시 선별합니다.
-
-사용 모델:
-
-```text
-gpt-5-nano
-```
-
-다음과 같은 요소를 함께 판단합니다.
-
-- 질문의 핵심 법률관계
-- 조문 제목과 질문의 직접적인 연관성
-- 일반 규정과 특수 규정 구분
-- 미성년자, 선원, 건설근로자 등 적용대상이 다른 법령 제거
-- 본문이 없는 조문 제거
-- 단순 단어 유사성으로 검색된 잘못된 후보 제거
-
----
-
-## 5. Generator
-
-Reranker가 최종 선택한 법령을 근거로 사용자에게 답변을 생성합니다.
-
-사용 모델:
-
-```text
-gpt-5.6-luna
-```
-
-Generator는 검색되지 않은 법령이나 조문을 임의로 생성하지 않도록 제한합니다.
-
----
-
-# 🏗 System Architecture
-
-```mermaid
-flowchart TD
-
-    U[User] --> FE[React / Vite]
-
-    FE --> API[FastAPI]
-
-    API --> C[Classifier]
-    C --> QR[Query Rewriter]
-
-    QR --> E[Exact Search]
-    QR --> K[SQLite FTS5]
-    QR --> V[Chroma Vector Search]
-
-    E --> M[Candidate Merge]
-    K --> M
-    V --> M
-
-    M --> F[Scope / Empty Data Filter]
-    F --> R[LLM Reranker]
-    R --> G[Grounded Generator]
-
-    G --> API
-    API --> FE
-
-    DB1[(SQLite)] --> E
-    DB1 --> K
-
-    DB2[(ChromaDB)] --> V
-
-    EMB[jhgan/ko-sroberta-multitask] --> V
-    OAI[OpenAI API] --> C
-    OAI --> QR
-    OAI --> R
-    OAI --> G
-```
-
----
-
-# 📊 Dataset
-
-대한민국 법령 데이터를 수집하여 검색용 데이터베이스로 가공했습니다.
-
-```text
-수집 법령 수       : 5,567
-원본 조문 수       : 221,399
-검색 DB 저장 조문  : 190,277
-Vector 수          : 190,277
-```
-
-현재 서비스에서 사용하는 핵심 데이터는 다음 두 개입니다.
-
-```text
-law_search.db
-law_db_optimized/
-```
-
----
-
-# 🗄 SQLite Search DB
-
-```text
-law_search.db
-```
-
-SQLite에는 다음 정보가 저장됩니다.
-
-```text
-법령명
-조문 번호
-조문 제목
-조문 본문
-FTS5 검색 데이터
-```
-
-담당 기능:
+ChromaDB와 Sentence Transformer Embedding을 이용하여  
+의미적으로 관련된 법령을 검색합니다.
 
 ```text
 Exact Search
+      +
 Keyword Search
-FTS5 Search
-Vector 검색 결과의 실제 법령 본문 조회
+      +
+Vector Search
+      ↓
+Candidate Laws
 ```
+
+중복되는 법령/조문은 제거한 뒤 Reranker로 전달합니다.
 
 ---
 
-# 🔎 Optimized Vector DB
+## 4. LLM Reranking
 
-```text
-law_db_optimized/
-```
+검색 결과에 단순히 동일한 단어가 등장한다고 해서  
+관련 법령으로 사용하지 않습니다.
 
-ChromaDB에는 법령 전체 본문을 중복 저장하지 않고 검색에 필요한 ID와 Embedding Vector를 중심으로 저장합니다.
+LLM Reranker가 다음 항목을 고려하여 법령 후보를 다시 평가합니다.
 
-기존 구조:
+- 사용자의 실제 질문과 직접 관련된 법령인지
+- 실체적인 권리·의무를 규정하는 조문인지
+- 특정 직업·신분·상황에만 적용되는 조문인지
+- 조문 제목뿐 아니라 실제 본문도 관련성이 있는지
+- 행정 조직이나 특수 절차만 규정한 조문인지
 
-```text
-약 1.9 GB
-```
-
-최적화 이후:
-
-```text
-약 619 MB
-```
-
-기존 Embedding 중 매핑 가능한 Vector는 그대로 재사용했으며,  
-누락된 조문만 추가 Embedding했습니다.
-
-```text
-재사용 Vector : 189,874
-추가 생성      : 403
-최종 Vector    : 190,277
-```
+최대 4개의 핵심 법령만 최종 Context로 전달합니다.
 
 ---
 
-# 🛡 Retrieval Safety
+## 5. 근거 기반 답변 생성
 
-## 적용범위 필터
+최종 Generator는 RAG에서 검색된 법령만을 근거로 답변합니다.
 
-일반적인 질문에 특정 대상에게만 적용되는 법령이 선택되는 것을 줄입니다.
+LLM이 알고 있는 일반적인 법률 지식을 임의로 추가하지 않도록 제한했습니다.
 
-예:
-
-```text
-미성년 근로자
-선원
-건설 근로자
-퇴직 근로자
-```
-
-사용자 질문에서 해당 조건이 확인되지 않는 경우 특수 조문을 우선 제외합니다.
-
-## 본문 없는 조문 제외
-
-원본 법령 데이터 일부에서 조문 제목은 존재하지만 실제 본문이 비어 있는 경우가 확인되었습니다.
-
-현재 서비스에서는 이런 조문을 법적 근거로 사용하는 것보다 제외하는 방향으로 처리합니다.
+답변 형식:
 
 ```text
-[본문 없음 제외]
+상황 분석
+
+대응 방법
+1. ...
+2. ...
+
+주의사항
+
+관련 법령
+- 법령명 / 조문
 ```
+
+검색되지 않은 다음 내용은 임의로 생성하지 않도록 Prompt를 구성했습니다.
+
+- 법령명
+- 조문 번호
+- 기관명
+- 제출 서류
+- 처리 기간
+- 금액
+- 시효
+- 신고 방법
+- 소송 절차
+
+---
+
+# 🤖 Ollama 기반 LLM
+
+기존 Cloud LLM API 의존 구조에서 벗어나  
+Ollama 기반 Local / Cloud LLM 구조를 적용했습니다.
+
+## Local Development
+
+개발 환경에서는 로컬 Ollama를 사용합니다.
+
+```env
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_FAST_MODEL=qwen3:8b
+OLLAMA_ANSWER_MODEL=qwen3:8b
+```
+
+구조:
+
+```text
+FastAPI
+  ↓
+LangGraph
+  ↓
+ChatOllama
+  ↓
+localhost:11434
+  ↓
+qwen3:8b
+```
+
+별도의 외부 LLM API 호출 없이 로컬 GPU를 이용하여 추론할 수 있습니다.
+
+---
+
+## Ollama Cloud
+
+배포 환경에서는 Ollama Cloud를 사용합니다.
+
+```env
+OLLAMA_BASE_URL=https://ollama.com
+OLLAMA_API_KEY=YOUR_OLLAMA_API_KEY
+OLLAMA_FAST_MODEL=gpt-oss:20b
+OLLAMA_ANSWER_MODEL=gpt-oss:20b
+```
+
+구조:
+
+```text
+Railway
+  ↓
+FastAPI
+  ↓
+LangGraph
+  ↓
+Ollama Cloud API
+  ↓
+gpt-oss:20b
+```
+
+API Key가 존재할 경우 Bearer Authentication Header를 자동으로 추가하도록 구현했습니다.
+
+따라서 동일한 코드에서 환경변수만 변경하여
+
+```text
+Local Ollama ↔ Ollama Cloud
+```
+
+환경을 전환할 수 있습니다.
+
+---
+
+# 🧠 Agent Workflow
+
+전체 LangGraph Workflow는 다음과 같습니다.
+
+```text
+START
+  ↓
+Classifier
+  ↓
+Query Rewriter
+  ↓
+Researcher
+  ↓
+Reranker
+  ↓
+Generator
+  ↓
+END
+```
+
+### Classifier
+
+질문의 법률 분야를 판별합니다.
+
+### Query Rewriter
+
+자연어 질문을 법령 검색용 Query로 변환합니다.
+
+### Researcher
+
+Exact + Keyword + Vector Search를 수행합니다.
+
+### Reranker
+
+검색된 후보 중 질문과 직접 관련된 법령을 선택합니다.
+
+### Generator
+
+선택된 법령만을 기반으로 최종 답변을 작성합니다.
 
 ---
 
 # 🛠 Tech Stack
 
-| Category           | Technology                    |
-| ------------------ | ----------------------------- |
-| Frontend           | React, Vite, JavaScript       |
-| Backend            | FastAPI, Uvicorn              |
-| AI Workflow        | LangGraph                     |
-| Lightweight LLM    | OpenAI `gpt-5-nano`           |
-| Answer LLM         | OpenAI `gpt-5.6-luna`         |
-| Embedding          | `jhgan/ko-sroberta-multitask` |
-| Vector DB          | ChromaDB                      |
-| Search DB          | SQLite, FTS5                  |
-| AI Framework       | LangChain                     |
-| Backend Deploy     | Railway                       |
-| Frontend Deploy    | Vercel                        |
-| Persistent Storage | Railway Volume                |
-| Python             | Python 3.11                   |
+## Frontend
+
+- React
+- Vite
+- JavaScript
+- CSS
+
+## Backend
+
+- Python
+- FastAPI
+- Uvicorn
+
+## AI / Agent
+
+- LangChain
+- LangGraph
+- Ollama
+- Ollama Cloud
+- Qwen3
+- gpt-oss
+
+## RAG / Search
+
+- ChromaDB
+- SQLite
+- FTS5
+- Sentence Transformers
+- HuggingFace Embedding
+
+## Deployment
+
+- Vercel — Frontend
+- Railway — Backend
+- Ollama Cloud — LLM Inference
 
 ---
 
 # 📁 Project Structure
 
 ```text
-Law-Action-Assistant/
+Law-Action-Assistant
 │
-├── backend/
-│   ├── graph/
+├── backend
+│   ├── graph
 │   │   └── legal_graph.py
 │   │
-│   ├── schemas/
-│   │   └── chat.py
-│   │
-│   ├── services/
+│   ├── services
 │   │   └── rag_service.py
 │   │
+│   ├── schemas
 │   └── main.py
 │
-├── frontend/
-│   ├── src/
+├── frontend
+│   ├── public
+│   ├── src
 │   ├── package.json
 │   └── vite.config.js
 │
-├── scripts/
+├── law_db
+├── law_db_optimized
 │
-├── law_search.db
-├── law_db_optimized/
+├── scripts
 │
 ├── requirements.txt
-├── README.md
-└── .gitignore
+├── .gitignore
+└── README.md
 ```
-
-`law_search.db`, `law_db_optimized` 등의 대용량 데이터는 GitHub 저장소에 포함하지 않습니다.
 
 ---
 
-# 💻 Local Development
+# 🚀 Local Setup
 
-현재 개발 환경은 Windows 기준입니다.
+## 1. Repository Clone
 
-## 1. 프로젝트 Clone
-
-```powershell
+```bash
 git clone https://github.com/Lee-TaeGeon/Law-Action-Assistant.git
-
 cd Law-Action-Assistant
 ```
 
@@ -417,79 +432,84 @@ cd Law-Action-Assistant
 
 ## 2. Python Virtual Environment
 
-Python 3.11 사용을 권장합니다.
+### Windows
 
 ```powershell
-py -3.11 -m venv .venv
-```
-
-PowerShell:
-
-```powershell
+python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-패키지 설치:
+---
+
+## 3. Install Backend Dependencies
 
 ```powershell
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 ---
 
-## 3. Backend Environment Variables
+## 4. Install Ollama
 
-프로젝트 루트에 `.env` 파일을 생성합니다.
+Ollama 설치 후 사용할 모델을 다운로드합니다.
+
+```powershell
+ollama run qwen3:8b
+```
+
+설치 확인:
+
+```powershell
+ollama list
+```
+
+---
+
+## 5. Environment Variables
+
+프로젝트 루트에 `.env`를 생성합니다.
 
 ```env
-OPENAI_API_KEY=YOUR_OPENAI_API_KEY
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_FAST_MODEL=qwen3:8b
+OLLAMA_ANSWER_MODEL=qwen3:8b
 ```
 
-API Key는 절대로 GitHub에 Commit하지 않습니다.
+> `.env` 파일은 Git에 Commit하지 않습니다.
 
 ---
 
-## 4. Backend 실행
+## 6. Run Backend
 
 ```powershell
-uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+python -m uvicorn backend.main:app --reload --port 8000
 ```
 
-Swagger:
+Backend:
 
 ```text
-http://127.0.0.1:8000/docs
+http://localhost:8000
 ```
 
-Health Check:
+FastAPI Docs:
 
 ```text
-http://127.0.0.1:8000/health
+http://localhost:8000/docs
 ```
 
 ---
 
-# 🖥 Frontend 실행
+## 7. Run Frontend
+
+새 터미널에서:
 
 ```powershell
 cd frontend
-
 npm install
-```
-
-`frontend/.env`:
-
-```env
-VITE_API_BASE_URL=http://127.0.0.1:8000
-```
-
-실행:
-
-```powershell
 npm run dev
 ```
 
-기본 주소:
+Frontend:
 
 ```text
 http://localhost:5173
@@ -497,80 +517,31 @@ http://localhost:5173
 
 ---
 
-# 🔌 API
+# ☁️ Deployment
 
-## POST `/api/chat`
+## Frontend
 
-Request:
-
-```json
-{
-  "question": "회사에서 임금을 두 달째 받지 못했습니다. 어떻게 해야 하나요?",
-  "session_id": "default"
-}
-```
-
-Response:
-
-```json
-{
-  "category": "노동",
-  "answer": "...",
-  "sources": [
-    {
-      "law_name": "근로기준법",
-      "article": "제43조",
-      "content": "..."
-    }
-  ]
-}
-```
-
----
-
-# ☁️ Deployment Architecture
+Frontend는 Vercel을 사용합니다.
 
 ```text
-GitHub
-   │
-   ├───────────────┐
-   │               │
-   ▼               ▼
-Railway          Vercel
-Backend          Frontend
-   │
-   ▼
-Railway Volume
-   │
-   ├── law_search.db
-   └── law_db_optimized/
+React / Vite
+     ↓
+Vercel
 ```
 
 ---
 
-# 🚂 Railway Backend Deployment
+## Backend
 
-## 1. GitHub Push
+Backend는 Railway를 사용합니다.
 
-로컬 수정이 끝났다면:
-
-```powershell
-git status
-
-git add .
-
-git commit -m "수정 내용"
-
-git push origin main
+```text
+FastAPI
+   ↓
+Railway
 ```
 
-Railway가 GitHub Repository의 `main` 브랜치와 연결되어 있다면 Push 이후 자동으로 새 Deployment가 시작됩니다.
-
----
-
-## 2. Railway Start Command
-
-Railway 서비스의 Start Command:
+Railway Start Command 예시:
 
 ```bash
 uvicorn backend.main:app --host 0.0.0.0 --port $PORT
@@ -578,386 +549,138 @@ uvicorn backend.main:app --host 0.0.0.0 --port $PORT
 
 ---
 
-## 3. Railway Environment Variables
-
-Railway → Service → Variables에서 다음 값을 설정합니다.
+## Railway Environment Variables
 
 ```env
-OPENAI_API_KEY=YOUR_OPENAI_API_KEY
-
-LAW_DATA_DIR=/data
-
-CORS_ORIGINS=https://law-action-assistant.vercel.app
-
-RAILPACK_PYTHON_VERSION=3.11
+OLLAMA_BASE_URL=https://ollama.com
+OLLAMA_API_KEY=YOUR_OLLAMA_API_KEY
+OLLAMA_FAST_MODEL=gpt-oss:20b
+OLLAMA_ANSWER_MODEL=gpt-oss:20b
 ```
 
-API Key는 Repository에 저장하지 않습니다.
-
----
-
-# 💾 Railway Persistent Volume
-
-법령 DB는 GitHub에 올리지 않고 Railway Volume에 별도로 저장합니다.
-
-Mount Path:
-
-```text
-/data
-```
-
-최종 구조:
-
-```text
-/data/
-├── law_search.db
-└── law_db_optimized/
-```
-
-Backend에서는 다음 환경변수를 사용합니다.
-
-```env
-LAW_DATA_DIR=/data
-```
-
-로컬에서는 환경변수가 없으면 프로젝트 루트의 DB를 사용합니다.
-
----
-
-# 🧰 Railway CLI
-
-Windows에서 Railway CLI 설치:
-
-```powershell
-npm install -g @railway/cli
-```
-
-확인:
-
-```powershell
-railway --version
-```
-
-로그인:
-
-```powershell
-railway login
-```
-
-프로젝트 연결:
-
-```powershell
-railway link
-```
-
-상태 확인:
-
-```powershell
-railway status
-```
-
----
-
-# 📦 Railway DB Upload
-
-대용량 DB는 GitHub가 아닌 Railway Volume으로 직접 업로드합니다.
-
-## SQLite
-
-```powershell
-railway service files upload `
-  .\law_search.db `
-  /data/law_search.db
-```
-
-## Vector DB
-
-```powershell
-railway service files upload `
-  .\law_db_optimized `
-  /data/law_db_optimized
-```
-
-파일 확인:
-
-```powershell
-railway service files list /data
-```
-
----
-
-# ✅ SQLite Upload Verification
-
-대용량 SQLite 파일은 업로드 후 파일 크기와 무결성을 확인하는 것이 좋습니다.
-
-Railway 서버 내부:
-
-```powershell
-railway ssh -- python -c "import os,sqlite3; p='/data/law_search.db'; print('size:',os.path.getsize(p)); db=sqlite3.connect(p); print('integrity:',db.execute('PRAGMA integrity_check').fetchone()); db.close()"
-```
-
-정상:
-
-```text
-integrity: ('ok',)
-```
-
-SHA256도 비교할 수 있습니다.
-
-로컬:
-
-```powershell
-Get-FileHash .\law_search.db -Algorithm SHA256
-```
-
-Railway:
-
-```powershell
-railway ssh -- sha256sum /data/law_search.db
-```
-
-두 Hash가 동일하면 업로드된 데이터가 원본과 동일합니다.
-
----
-
-# ▲ Vercel Frontend Deployment
-
-Vercel에서 GitHub Repository를 연결합니다.
-
-설정:
-
-```text
-Framework Preset
-Vite
-
-Root Directory
-frontend
-
-Build Command
-npm run build
-
-Output Directory
-dist
-```
-
-Environment Variable:
-
-```env
-VITE_API_BASE_URL=https://law-action-assistant-production.up.railway.app
-```
-
-배포 후 Frontend URL:
-
-```text
-https://law-action-assistant.vercel.app
-```
-
----
-
-# 🌐 CORS
-
-FastAPI에서는 로컬과 Vercel Origin을 허용합니다.
-
-로컬:
-
-```text
-http://localhost:5173
-```
-
-배포 환경은 Railway 환경변수에서 설정합니다.
-
-```env
-CORS_ORIGINS=https://law-action-assistant.vercel.app
-```
-
----
-
-# 🔄 코드 수정 후 재배포
-
-평소 개발 이후에는 다음 과정만 수행하면 됩니다.
-
-```text
-코드 수정
-    ↓
-Local Test
-    ↓
-git add
-    ↓
-git commit
-    ↓
-git push origin main
-    ↓
-GitHub
-    ↓
-┌──────────────────┐
-│ Railway Redeploy │
-│ Vercel Redeploy  │
-└──────────────────┘
-    ↓
-Production Test
-```
-
-실제 명령:
-
-```powershell
-git status
-
-git add .
-
-git commit -m "개선: 변경 내용"
-
-git push origin main
-```
-
-Backend 파일 변경 시 Railway가 자동 재배포되고,  
-Frontend 파일 변경 시 Vercel도 자동 재배포됩니다.
-
----
-
-# 🔍 Deployment Test
-
-## Backend
-
-```text
-https://law-action-assistant-production.up.railway.app
-```
-
-Health:
-
-```text
-https://law-action-assistant-production.up.railway.app/health
-```
-
-Swagger:
-
-```text
-https://law-action-assistant-production.up.railway.app/docs
-```
-
-## Frontend
-
-```text
-https://law-action-assistant.vercel.app
-```
-
-실제 서비스에서 질문을 입력하여 다음 전체 흐름을 확인합니다.
-
-```text
-React
-↓
-Railway FastAPI
-↓
-LangGraph
-↓
-SQLite / ChromaDB
-↓
-OpenAI
-↓
-Answer + Sources
-```
-
----
-
-# 🔧 Deployment Troubleshooting
-
-## HTTP 500
-
-먼저 Railway Deploy Logs를 확인합니다.
-
-OpenAI 연결 테스트:
-
-```powershell
-railway ssh -- python -c "import os; print(bool(os.getenv('OPENAI_API_KEY')))"
-```
-
-`True`가 나와야 합니다.
-
-직접 모델 호출 테스트:
-
-```powershell
-railway ssh -- python -c "from backend.graph.legal_graph import get_fast_llm; print(get_fast_llm().invoke('테스트라고 답해').content)"
-```
-
----
-
-## SQLite DB 오류
-
-다음과 같은 오류가 발생할 수 있습니다.
-
-```text
-database disk image is malformed
-```
-
-이 경우 Railway에 업로드된 DB가 완전한지 파일 크기, SHA256, `PRAGMA integrity_check`를 확인합니다.
-
-검증된 새 DB를 임시 파일로 업로드한 뒤 정상임을 확인하고 교체하는 방식이 안전합니다.
-
----
-
-## CORS 오류
-
-Frontend에서는 정상인데 API 호출이 차단된다면 Railway의:
-
-```env
-CORS_ORIGINS
-```
-
-값을 확인합니다.
-
-현재 Production Origin:
-
-```text
-https://law-action-assistant.vercel.app
-```
+API Key는 Repository에 저장하지 않고  
+Railway Variables에서 관리합니다.
 
 ---
 
 # 🔐 Security
 
-다음 파일과 값은 GitHub에 업로드하지 않습니다.
+다음 값은 GitHub Repository에 Commit하지 않습니다.
 
 ```text
 .env
-OPENAI_API_KEY
-.venv/
-frontend/node_modules/
-law_search.db
-law_db_optimized/
+OLLAMA_API_KEY
+API Keys
+Secret Keys
 ```
 
-대용량 데이터는 Railway Volume 또는 별도 Backup Storage에서 관리합니다.
+`.gitignore`를 통해 환경설정 파일과 가상환경을 제외합니다.
 
 ---
 
-# 📌 Current Limitations
+# 📌 Example
 
-현재 서비스는 포트폴리오 및 기술 검증을 위한 Beta 버전입니다.
+### 사용자
 
-수집된 일부 법령 데이터에서 본문이 비어 있는 조문이 확인되었습니다.
+```text
+월급을 받지 못했는데 어떻게 해야 하나요?
+```
 
-따라서 현재는 본문이 없는 조문을 답변의 법적 근거에서 제외합니다.
+### Agent
 
-향후 개선 계획:
+```text
+1. 질문을 노동 분야로 분류
 
-- 국가법령정보 공동활용 API 기반 데이터 재수집
-- 법령 자동 최신화
-- 법령 개정 이력 관리
-- Retrieval Evaluation Dataset 구축
-- Recall / Precision 평가
-- 법령 원문 링크 제공
-- 사용자 인증
-- 상담 기록 서버 저장
-- 검색 및 LLM 비용 최적화
+2. 검색 Query 생성
+   - 임금
+   - 임금 지급
+   - 임금체불
+   - 체불임금
+
+3. 법령 검색
+   - Exact Search
+   - Keyword Search
+   - Vector Search
+
+4. Reranking
+
+5. 관련 법령 기반 답변 생성
+```
 
 ---
 
-# ⚠️ Disclaimer
+# 🎯 프로젝트에서 구현한 핵심 내용
 
-Law Action Assistant는 변호사 등 법률 전문가의 자문을 대체하지 않습니다.
+- LangGraph 기반 Multi-step Legal Agent 설계
+- 법률 질문 자동 분류
+- LLM 기반 Query Rewrite
+- SQLite FTS5 기반 Keyword Retrieval
+- ChromaDB 기반 Vector Retrieval
+- Exact + Keyword + Vector Hybrid Retrieval
+- LLM Reranking
+- RAG Grounded Answer Generation
+- Local Ollama 연동
+- Ollama Cloud 연동
+- Local / Cloud LLM 실행환경 분리
+- FastAPI Backend API 구축
+- React 기반 Web UI
+- Vercel / Railway Cloud Deployment
 
-본 서비스가 제공하는 답변은 검색된 대한민국 법령 데이터를 기반으로 생성되는 참고용 법률 정보이며, 구체적인 사건에 대한 법률 판단이나 법률 자문을 의미하지 않습니다.
+---
 
-실제 법적 대응이 필요한 경우 법률 전문가의 검토가 필요할 수 있습니다.
+# 🔄 Local / Cloud LLM Architecture
+
+이 프로젝트의 특징 중 하나는 동일한 Agent 코드에서  
+LLM 실행 환경을 변경할 수 있다는 점입니다.
+
+```text
+                LangGraph
+                    │
+                 ChatOllama
+                /          \
+               /            \
+      Local Development     Production
+             │                  │
+        Ollama Local        Ollama Cloud
+             │                  │
+          qwen3:8b          gpt-oss:20b
+             │                  │
+        Local GPU           Cloud GPU
+```
+
+개발 단계에서는 Local GPU를 사용하여 API 비용 없이 테스트하고,  
+배포 환경에서는 Cloud inference를 사용하여 로컬 PC와 독립적으로 서비스할 수 있습니다.
+
+---
+
+# ⚠️ Limitations
+
+현재 프로젝트는 다음과 같은 한계가 있습니다.
+
+- 검색된 법령의 관련성이 질문에 따라 달라질 수 있습니다.
+- LLM Reranker가 관련성이 낮은 법령을 선택할 가능성이 있습니다.
+- 법령 데이터의 최신성이 실제 현행 법령과 다를 수 있습니다.
+- 판례 검색은 현재 핵심 기능에 포함되어 있지 않습니다.
+- AI의 답변은 실제 법률 자문을 대신할 수 없습니다.
+
+따라서 실제 법률 문제에 적용하기 전 반드시 최신 법령과 공식 자료를 확인해야 합니다.
+
+---
+
+# 🗺 Roadmap
+
+향후 개선 예정 기능:
+
+- [ ] RAG 검색 정확도 개선
+- [ ] 법률 분야별 Retrieval Filtering 강화
+- [ ] Reranker 평가 로직 개선
+- [ ] 관련성이 낮은 법령 자동 제거
+- [ ] 판례 검색 기능 추가
+- [ ] 답변 근거 검증 단계 추가
+- [ ] 법령 데이터 최신화 자동화
+- [ ] LLM 모델별 응답 품질 비교
+- [ ] Streaming Response 지원
+- [ ] 테스트 및 Evaluation Dataset 구축
 
 ---
 
@@ -967,12 +690,11 @@ Law Action Assistant는 변호사 등 법률 전문가의 자문을 대체하지
 
 AI Service / Backend Developer
 
-GitHub:
-
+GitHub  
 https://github.com/Lee-TaeGeon
 
 ---
 
-# 📄 License
+## License
 
 본 프로젝트는 포트폴리오 및 학습 목적으로 개발되었습니다.

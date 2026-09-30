@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
+import { useConversations } from "./hooks/useConversations";
 import "./App.css";
 import Header from "./components/layout/Header";
 import Sidebar from "./components/layout/sidebar";
@@ -6,8 +7,6 @@ import ChatInput from "./components/ChatInput";
 import ChatMessage from "./components/ChatMessage";
 import ChatWindow from "./components/chat/Chatwindow";
 import { sendChat } from "./api/chatApi";
-
-const STORAGE_KEY = "law-action-assistant-chats-v1";
 
 function createSessionId() {
   if (globalThis.crypto?.randomUUID) {
@@ -27,25 +26,9 @@ function createTitle(question) {
   return `${trimmed.slice(0, 28)}...`;
 }
 
-function loadSavedConversations() {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-
-    if (!saved) {
-      return [];
-    }
-
-    const parsed = JSON.parse(saved);
-
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (error) {
-    console.error("상담 기록 불러오기 실패:", error);
-    return [];
-  }
-}
-
 function App() {
-  const [conversations, setConversations] = useState(loadSavedConversations);
+  const { conversations, setConversations, sortedConversations } =
+    useConversations();
 
   const [activeChatId, setActiveChatId] = useState(null);
   const [sessionId, setSessionId] = useState(createSessionId);
@@ -54,21 +37,6 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations));
-    } catch (error) {
-      console.error("상담 기록 저장 실패:", error);
-    }
-  }, [conversations]);
-
-  const sortedConversations = useMemo(() => {
-    return [...conversations].sort(
-      (a, b) =>
-        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-    );
-  }, [conversations]);
 
   const handleNewChat = () => {
     if (loading) {

@@ -9,7 +9,7 @@
 
 과정을 LangGraph로 구성했습니다.
 
-개발 환경에서는 **Ollama Local**, 배포 환경에서는 **Ollama Cloud**를 사용하여  
+개발 환경에서는 **Ollama Local**, 배포 환경`에서는 **Ollama Cloud**를 사용하여  
 OpenAI API에 의존하지 않고 Local / Cloud LLM 환경을 분리했습니다.
 
 > ⚠️ 본 프로젝트는 법률 정보 검색 및 AI 기술 데모를 목적으로 제작되었습니다.  

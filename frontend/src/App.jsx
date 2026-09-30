@@ -4,7 +4,6 @@ import "./App.css";
 import Header from "./components/layout/Header";
 import Sidebar from "./components/layout/sidebar";
 import ChatInput from "./components/ChatInput";
-import ChatMessage from "./components/ChatMessage";
 import ChatWindow from "./components/chat/Chatwindow";
 import { sendChat } from "./api/chatApi";
 

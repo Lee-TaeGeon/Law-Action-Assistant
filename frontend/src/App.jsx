@@ -4,6 +4,7 @@ import Header from "./components/layout/Header";
 import Sidebar from "./components/layout/sidebar";
 import ChatInput from "./components/ChatInput";
 import ChatMessage from "./components/ChatMessage";
+import ChatWindow from "./components/chat/Chatwindow";
 import { sendChat } from "./api/chatApi";
 
 const STORAGE_KEY = "law-action-assistant-chats-v1";
@@ -229,71 +230,7 @@ function App() {
           loading={loading}
         />
 
-        <section className="chat-container">
-          {messages.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-icon">⚖️</div>
-
-              <h2>어떤 법률 문제가 궁금하신가요?</h2>
-
-              <p>상황을 구체적으로 입력하면 관련 법령을 검색해 답변합니다.</p>
-
-              <div className="example-questions">
-                <button
-                  onClick={() =>
-                    handleSend(
-                      "회사에서 임금을 두 달째 받지 못했습니다. 어떻게 해야 하나요?",
-                    )
-                  }
-                  disabled={loading}
-                >
-                  임금을 받지 못했어요
-                </button>
-
-                <button
-                  onClick={() =>
-                    handleSend(
-                      "중고거래 사기를 당한 것 같습니다. 어떻게 대응해야 하나요?",
-                    )
-                  }
-                  disabled={loading}
-                >
-                  중고거래 사기를 당했어요
-                </button>
-
-                <button
-                  onClick={() =>
-                    handleSend("이혼할 때 재산분할은 어떻게 하나요?")
-                  }
-                  disabled={loading}
-                >
-                  이혼 재산분할이 궁금해요
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="message-list">
-              {messages.map((message, index) => (
-                <ChatMessage
-                  key={`${message.role}-${index}`}
-                  message={message}
-                />
-              ))}
-
-              {loading && (
-                <div className="loading-message">
-                  <div className="loading-avatar">AI</div>
-
-                  <div className="loading-content">
-                    <span />
-                    <span />
-                    <span />
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </section>
+        <ChatWindow messages={messages} loading={loading} onSend={handleSend} />
 
         {error && <div className="error-message">{error}</div>}
 

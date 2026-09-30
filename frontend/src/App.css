@@ -1016,4 +1016,51 @@ button {
   .app-footer {
     width: calc(100% - 20px);
   }
+
+  /* Sidebar 리팩토링 */
+
+.conversation-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+
+  width: 100%;
+
+  border-radius: 9px;
+}
+
+.conversation-row:hover {
+  background: #1f2937;
+}
+
+.conversation-row.active {
+  background: #253047;
+}
+
+.conversation-row .conversation-item {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+
+.conversation-row .conversation-delete {
+  flex-shrink: 0;
+
+  margin-right: 8px;
+
+  border: 0;
+  background: transparent;
+}
+
+.conversation-delete:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.conversation-select:focus-visible,
+.conversation-item:focus-visible,
+.conversation-delete:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: 2px;
+}
 }

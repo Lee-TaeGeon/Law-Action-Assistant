@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Any, TypeAlias
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
@@ -26,7 +26,7 @@ from backend.graph import legal_graph_v10 as v10
 from backend.graph import legal_graph_v11 as v11
 
 logger = logging.getLogger(__name__)
-AgentState = v11.AgentState
+AgentState: TypeAlias = v11.AgentState
 
 
 def _compact(value: Any) -> str:

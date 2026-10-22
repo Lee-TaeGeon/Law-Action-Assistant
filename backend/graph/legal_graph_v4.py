@@ -62,8 +62,13 @@ def parse_reranker_choice(reply: str, candidates: list[dict], limit: int = 4) ->
         s = s[1:-1].strip()
 
     # 권장 출력: 불투명한 후보 ID (법령 조문번호와 구별).
-    if re.fullmatch(r"C\d{2}(?:\s*,\s*C\d{2})*", s):
-        indexes = [int(part.strip()[1:]) for part in s.split(",")]
+    
+    if re.fullmatch(r"C\d{2}(?:\s*(?:,|\n)\s*C\d{2})*", s):
+        indexes = [
+            int(part[1:])
+            for part in re.split(r"\s*(?:,|\n)\s*", s)
+        ]
+
     elif re.fullmatch(r"\d+(?:\s*,\s*\d+)*", s):
         nums = [int(part.strip()) for part in s.split(",")]
         if all(0 <= n < len(candidates) for n in nums):
@@ -111,7 +116,7 @@ def reranker_node(state: AgentState) -> dict[str, Any]:
                 "적용범위 미확인 후보 배제: %s %s (%s)",
                 source.get("law_name"), source.get("article"), reason,
             )
-    candidates = kept[:12]
+    candidates = kept[:16]
     if not candidates:
         return {"sources": [], "reranker_status": "none"}
 
@@ -121,7 +126,7 @@ def reranker_node(state: AgentState) -> dict[str, Any]:
             f"[후보ID C{i:02d}] 법령: {source.get('law_name', '')} {source.get('article', '')}\n"
             f"조문명: {source.get('article_title', '')}\n"
             f"편·장·절 문맥: {source.get('section_scope', '') or '(확인되지 않음)'}\n"
-            f"법문:\n{str(source.get('content', ''))[:1200]}"
+            f"법문:\n{str(source.get('content', ''))[:900]}"
         )
     candidate_text = "\n\n".join(blocks)
     prompt = (

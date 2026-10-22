@@ -13,13 +13,8 @@ from __future__ import annotations
 
 from typing import TypeAlias
 
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import END, StateGraph
 
-from backend.graph import legal_graph_v3 as v3
 from backend.graph import legal_graph_v4 as v4
-from backend.graph import legal_graph_v5 as v5
-from backend.graph import legal_graph_v6 as v6
 from backend.graph import legal_graph_v10 as v10
 from backend.graph import legal_graph_v11 as v11
 from backend.graph import legal_reranker as reranker_module

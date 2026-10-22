@@ -27,7 +27,7 @@ from backend.graph import legal_graph_v6 as v6
 from backend.graph import legal_graph_v9 as v9
 from backend.graph import legal_graph_v10 as v10
 from backend.graph import legal_conversation_context as context
-
+from backend.graph.legal_action_guidance import build_evidence_guidance
 
 MAX_PREVIOUS_TURNS = context.MAX_PREVIOUS_TURNS
 MAX_TURN_CHARS = context.MAX_TURN_CHARS
@@ -94,24 +94,58 @@ def _improve_followup_questions(answer: str, current: str, previous: list[str]) 
     return answer
 
 
+
 def generator_node(state: AgentState) -> dict[str, Any]:
-    """v9 인용·원문 복구는 그대로 사용하고 후속 질문의 표시만 조정한다."""
+    """검증된 법령 인용을 보존하고 필요한 경우 일반 안내를 추가한다."""
+
     result = v9.generator_node(state)
+
+    # 기존 검증 실패 차단 동작 유지
     if result.get("answer_validation_status") != "ok":
         return result
+
     previous = _history(state)
     current = str(state.get("incoming_question") or "").strip()
+
+    guidance = build_evidence_guidance(current, previous)
+
+    # 첫 질문인 경우
     if not previous:
-        return result
-    answer = _improve_followup_questions(str(result.get("answer") or ""), current, previous)
-    # 실제 입력한 사용자 표현만 보여주며, 사실 인정이나 법적 평가를 추가하지 않는다.
+        if not guidance:
+            return result
+
+        return {
+            **result,
+            "answer": (
+                f"{guidance}\n\n"
+                f"{result.get('answer', '')}"
+            ),
+        }
+
+    # 기존 후속 질문 처리
+    answer = _improve_followup_questions(
+        str(result.get("answer") or ""),
+        current,
+        previous,
+    )
+
+    # 행동 안내는 법령 인용 영역과 분리
+    if guidance:
+        answer = f"{guidance}\n\n{answer}"
+
+    # 기존 사용자 진술 표시 유지
     raw_statement = _clean_turn(current, max_chars=350)
+
     if raw_statement:
         answer = (
-            "## 이번에 추가로 알려준 내용 (사용자 진술, 사실관계 미검증)\n"
-            f"{raw_statement}\n\n" + answer
+            "## 이번에 추가로 알려준 내용 "
+            "(사용자 진술, 사실관계 미검증)\n"
+            f"{raw_statement}\n\n"
+            + answer
         )
+
     return {**result, "answer": answer}
+
 
 
 def finish_turn_node(state: AgentState) -> dict[str, Any]:

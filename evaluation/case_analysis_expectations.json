@@ -1,0 +1,68 @@
+
+{
+  "dataset_version": "1.0",
+  "description": "법률 사건 분석기 평가 기준 초안. 법률 전문가 검토 전이며 실제 서비스의 판단 규칙으로 사용하지 않는다.",
+  "cases": [
+    {
+      "id": "LAW-001",
+      "required_user_requests": [
+         "임금체불에 대비해 확보할 증거 안내",
+         "임금체불 신고 기관 안내"
+      ],
+      "important_missing_facts": [
+        "미지급 임금의 금액과 지급 예정일",
+        "근로관계와 임금 약정의 구체적 내용"
+      ],
+      "review_status": "pending"
+    },
+    {
+      "id": "LAW-002",
+      "required_user_requests": [
+        "중고거래 사기죄 성립 가능성 검토",
+        "피해금 반환 및 회수 방법 안내"
+      ],
+      "important_missing_facts": [
+        "판매자의 거래 당시 의사와 관련된 정황",
+        "송금 내역 및 판매자와의 대화 내용"
+      ],
+      "review_status": "pending"
+    },
+    {
+      "id": "LAW-003",
+      "required_user_requests": [
+        "전세보증금 반환을 위한 법적 대응 절차 안내"
+      ],
+      "important_missing_facts": [
+        "계약 종료일 및 종료 경위",
+        "보증금 액수와 반환 요구 내역",
+        "현재 주택 점유 및 이사 예정 여부"
+      ],
+      "review_status": "pending"
+    },
+    {
+      "id": "LAW-004",
+      "required_user_requests": [
+        "양육비 미지급에 대한 대응 방법 안내"
+      ],
+      "important_missing_facts": [
+        "양육비 합의의 방식 및 내용",
+        "법원 판결이나 조정조서 등 집행 근거의 존재",
+        "미지급 금액과 기간"
+      ],
+      "review_status": "pending"
+    },
+    {
+      "id": "LAW-005",
+      "required_user_requests": [
+        "행정처분에 대한 이의신청 가능성 검토",
+        "행정심판 가능성 및 절차 검토"
+      ],
+      "important_missing_facts": [
+        "처분의 구체적인 종류와 내용",
+        "처분 통지일 또는 처분을 알게 된 날",
+        "처분을 내린 행정기관"
+      ],
+      "review_status": "pending"
+    }
+  ]
+}

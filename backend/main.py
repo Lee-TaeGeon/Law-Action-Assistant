@@ -1,10 +1,12 @@
+
 import os
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.schemas.chat import ChatRequest, ChatResponse, LawSource
-from backend.graph.legal_graph import run_legal_chat
+from backend.schemas.chat import ChatRequest, ChatResponse
+from backend.api_v13_support import _quoted_sources
+from backend.graph.legal_graph_v13 import run_legal_chat
 
 
 app = FastAPI(
@@ -19,12 +21,10 @@ app = FastAPI(
 
 cors_origins = [
     "http://localhost:5173",
+    "http://127.0.0.1:5173",
 ]
 
-cors_env = os.getenv(
-    "CORS_ORIGINS",
-    "",
-)
+cors_env = os.getenv("CORS_ORIGINS", "")
 
 if cors_env:
     for origin in cors_env.split(","):
@@ -40,6 +40,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[
+        "X-Legal-Validation-Status",
+        "X-Legal-Evidence-Mode",
+    ],
 )
 
 
@@ -67,28 +71,28 @@ def health():
 
 
 # =========================================================
-# Chat API
+# Chat API - LangGraph v13
 # =========================================================
 
 @app.post(
     "/api/chat",
     response_model=ChatResponse,
 )
-def chat(request: ChatRequest):
+def chat(request: ChatRequest, response: Response):
     try:
         result = run_legal_chat(
             question=request.question,
             session_id=request.session_id,
         )
 
-        sources = [
-            LawSource(
-                law_name=source["law_name"],
-                article=source.get("article"),
-                content=source["content"],
-            )
-            for source in result.get("sources", [])
-        ]
+        response.headers["X-Legal-Validation-Status"] = str(
+            result.get("answer_validation_status", "unknown")
+        )
+        response.headers["X-Legal-Evidence-Mode"] = str(
+            result.get("evidence_selection_mode", "unknown")
+        )
+
+        sources = _quoted_sources(result)
 
         return ChatResponse(
             category=result.get("category", "기타"),

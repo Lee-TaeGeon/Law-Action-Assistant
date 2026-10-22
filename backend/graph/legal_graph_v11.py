@@ -10,7 +10,6 @@
 - 이 기억은 서버 프로세스의 메모리 안에서만 유지되고 재시작 시 사라진다.
 - 사용자가 '새 사건' 등으로 시작하면 해당 thread의 이전 사용자 진술을 제외한다.
 - 사용자 진술은 검증된 사실이 아니며 실제 사건의 법적 판단·현행성은 별도 확인해야 한다.
-
 주의: 실험용. 인증 없는 session_id는 실제 서비스의 개인정보 격리 수단이 아니다.
 필수 DB 환경변수는 이 파일 최초 import 전에 지정해야 한다.
 """
@@ -21,24 +20,25 @@ from typing import Any
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
-
 from backend.graph import legal_graph_v5 as v5
 from backend.graph import legal_graph_v6 as v6
 from backend.graph import legal_graph_v9 as v9
 from backend.graph import legal_graph_v10 as v10
 from backend.graph import legal_conversation_context as context
 from backend.graph.legal_action_guidance import build_evidence_guidance
+from backend.graph.legal_question_intent import analyze_question_intents
 
 MAX_PREVIOUS_TURNS = context.MAX_PREVIOUS_TURNS
 MAX_TURN_CHARS = context.MAX_TURN_CHARS
 MAX_CURRENT_CHARS = context.MAX_CURRENT_CHARS
 RESET_PATTERN = context.RESET_PATTERN
 
-
 class AgentState(v9.AgentState, total=False):
     incoming_question: str            # 이 API 요청에서 사용자가 실제 입력한 문장
     user_turn_history: list[str]      # 서버에 남는 사용자 진술만 (AI 답변은 저장하지 않음)
     followup_context_used: bool       # 이번 요청에서 이전 진술을 참조했는가
+    question_intents: list[str]       # 이번 질문에서 식별한 모든 의도
+    primary_intent: str               # 이번 질문의 주된 의도
 
 
 
@@ -48,7 +48,6 @@ _history = context._history
 _is_new_case = context._is_new_case
 contextual_question = context.contextual_question
 
-
 def prepare_turn_node(state: AgentState) -> dict[str, Any]:
     current = str(state.get("incoming_question") or "").strip()
     if not current:
@@ -56,12 +55,14 @@ def prepare_turn_node(state: AgentState) -> dict[str, Any]:
     if len(current) > MAX_CURRENT_CHARS:
         raise ValueError(f"사용자 질문은 최대 {MAX_CURRENT_CHARS}자까지 허용합니다.")
     previous = [] if _is_new_case(current) else _history(state)
+    intent_result = analyze_question_intents(current)
     return {
         "question": contextual_question(previous, current),
         "user_turn_history": previous,
         "followup_context_used": bool(previous),
+        "question_intents": intent_result["intents"],
+        "primary_intent": intent_result["primary_intent"],
     }
-
 
 def reference_guard_node(state: AgentState) -> dict[str, Any]:
     """구형 가드가 이전 메시지의 법령명을 '이번 명시 질의'로 오인하지 않게 한다."""
@@ -71,7 +72,6 @@ def reference_guard_node(state: AgentState) -> dict[str, Any]:
 
 def _improve_followup_questions(answer: str, current: str, previous: list[str]) -> str:
     """배송 약속을 이미 밝힌 경우, 반복 질문을 더 구체적 사실 확인으로 바꾼다.
-
     어떤 법령도 추가하지 않고, 사용자 설명에서 확인된 표현만 사용한다.
     """
     if not previous or "## 사건 확인에 필요한 사실" not in answer:
@@ -93,8 +93,6 @@ def _improve_followup_questions(answer: str, current: str, previous: list[str]) 
         )
     return answer
 
-
-
 def generator_node(state: AgentState) -> dict[str, Any]:
     """검증된 법령 인용을 보존하고 필요한 경우 일반 안내를 추가한다."""
 
@@ -113,7 +111,6 @@ def generator_node(state: AgentState) -> dict[str, Any]:
     if not previous:
         if not guidance:
             return result
-
         return {
             **result,
             "answer": (
@@ -135,7 +132,6 @@ def generator_node(state: AgentState) -> dict[str, Any]:
 
     # 기존 사용자 진술 표시 유지
     raw_statement = _clean_turn(current, max_chars=350)
-
     if raw_statement:
         answer = (
             "## 이번에 추가로 알려준 내용 "
@@ -153,7 +149,6 @@ def finish_turn_node(state: AgentState) -> dict[str, Any]:
     current = _clean_turn(state.get("incoming_question"))
     previous = _history(state)
     return {"user_turn_history": (previous + [current])[-MAX_PREVIOUS_TURNS:]}
-
 
 workflow = StateGraph(AgentState)
 for name, node in (
@@ -184,7 +179,6 @@ for start, end in (
     ("finish_turn", END),
 ):
     workflow.add_edge(start, end)
-
 legal_graph = workflow.compile(checkpointer=MemorySaver())
 
 
@@ -197,7 +191,6 @@ def run_legal_chat(question: str, session_id: str) -> dict:
         {"incoming_question": question.strip()},
         config={"configurable": {"thread_id": session_id}},
     )
-
 
 def self_test() -> None:
     """외부 DB/Ollama 없이 문맥·명시법령 검사·질문 보정 및 노드 연결 검사."""
@@ -214,7 +207,6 @@ def self_test() -> None:
     assert not prepare_turn_node({**saved1, "incoming_question": "새 사건: 임금체불 관련 질문"})["followup_context_used"]
     assert len(finish_turn_node({"incoming_question": "추가", "user_turn_history": ["a", "b", "c"]})["user_turn_history"]) == 3
     print("[통과] 같은 세션의 사용자 진술 누적 / 신규 사건 문맥 초기화 / 최대 3개 과거 발화 유지")
-
     orig_guard = v9.reference_guard_node
     received = []
     try:
@@ -227,7 +219,6 @@ def self_test() -> None:
     finally:
         v9.reference_guard_node = orig_guard
     print("[통과] 명시 법령·조문 검사는 이번 사용자 질문만 대상으로 수행")
-
     old = """## 확인된 법령 원문\n- **형법 제347조 (사기)**\n  - 법문 원문: “사람을 기망하여 재물을 교부받은 경우”\n\n## 사건 확인에 필요한 사실\n1. 거래 당시 판매자가 어떤 설명과 약속을 했나요?\n2. 대금 지급일과 물품의 실제 배송·인도 상황은 어떠한가요?\n\n## 검증 범위와 주의사항\n인용문 검증"""
     refined = _improve_followup_questions(old, followup, [first])
     assert "판매자가 배송을 약속한 구체적인 날짜" in refined
@@ -235,7 +226,6 @@ def self_test() -> None:
     assert "**형법 제347조 (사기)**" in refined and "인용문 검증" in refined
     assert _improve_followup_questions(old, followup, []) == old
     print("[통과] 이미 알려준 배송 약속을 반복 질문하지 않고 후속 사실확인 질문으로 조정")
-
     expected = {
         "researcher": v10.researcher_node,
         "reranker": v5.reranker_node,
@@ -250,7 +240,6 @@ def self_test() -> None:
         assert actual is fn, f"노드 연결 오류: {name}"
     print("[통과] RAG v6 / 기존 Reranker / v9 검증형 Generator / 문맥 노드 연결")
     print("단위 테스트 완료. Ollama, 실제 SQLite·ChromaDB는 호출하지 않았습니다.")
-
 
 if __name__ == "__main__":
     self_test()

@@ -93,3 +93,107 @@ def classify_question_intent(question: str) -> str:
 
     # 의도를 확정하기 어려운 질문
     return "other"
+
+
+
+def analyze_question_intents(question: str) -> dict:
+    """질문에 포함된 여러 요청 의도를 분석한다.
+
+    primary_intent는 가장 먼저 나타난 명시적 요청을 기준으로 한다.
+    법령의 적용 여부나 법률적 판단은 수행하지 않는다.
+    """
+
+    text = re.sub(r"\s+", " ", str(question or "")).strip()
+
+    if not text:
+        return {
+            "intents": ["other"],
+            "primary_intent": "other",
+        }
+
+    matches: list[tuple[int, str]] = []
+
+    def add_match(intent_name: str, pattern: str) -> None:
+        found = re.search(pattern, text)
+        if found:
+            matches.append((found.start(), intent_name))
+
+    # 1. 문서 초안 작성
+    document = re.search(
+        r"내용증명|고소장|소장|진정서|신청서|탄원서|합의서",
+        text,
+    )
+    writing = re.search(
+        r"초안|작성|써줘|만들어|양식|문구",
+        text,
+    )
+
+    if document and writing:
+        matches.append(
+            (document.start(), "document_draft")
+        )
+
+    # 2. 법령 및 법적 요건 설명
+    add_match(
+        "legal_explanation",
+        (
+            r"성립\s*요건|법적\s*요건|증거능력|"
+            r"조문|조항|법령?\s*설명|해석|"
+            r"적용되|"
+            r"(?:형법|민법)\s*제\d+조"
+        ),
+    )
+
+    # 3. 증거 확보 및 기록 보존
+    evidence = re.search(
+        r"증거(?!능력)|자료|기록|입증",
+        text,
+    )
+    evidence_action = re.search(
+        r"확보|모으|모아|보관|보존|남기|남겨|"
+        r"수집|준비|필요|챙기|입증",
+        text,
+    )
+
+    if evidence and evidence_action:
+        matches.append(
+            (evidence.start(), "evidence_collection")
+        )
+
+    # 4. 신고·고소·소송 절차
+    add_match(
+        "procedure",
+        (
+            r"신고(?:하는|할|하|방법|절차)?|"
+            r"고소\s*절차|고소하|"
+            r"진정(?:을|은|하는|제기)|"
+            r"소송\s*(?:절차|시작|제기)|"
+            r"제기하|접수|"
+            r"신청(?:하는)?\s*(?:방법|절차)|절차"
+        ),
+    )
+
+    # 5. 사건 분석 및 평가
+    add_match(
+        "case_analysis",
+        r"분석|평가|법적으로 어떻게|민사인지 형사인지|판단",
+    )
+
+    if not matches:
+        fallback = classify_question_intent(text)
+        return {
+            "intents": [fallback],
+            "primary_intent": fallback,
+        }
+
+    # 질문에서 먼저 등장한 요청부터 정렬
+    matches.sort(key=lambda item: item[0])
+
+    intents = list(dict.fromkeys(
+        intent_name for _, intent_name in matches
+    ))
+
+    return {
+        "intents": intents,
+        "primary_intent": intents[0],
+    }

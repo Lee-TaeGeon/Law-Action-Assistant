@@ -33,33 +33,55 @@ class AgentState(v8.AgentState, total=False):
     evidence_selection_mode: str  # llm_verified / deterministic_fallback / none
 
 
-def _candidate_quotes(source: dict) -> list[str]:
-    """저장된 본문에서만 연속 원문 부분 문자열을 반환한다.
 
-    요약/번역/법률 판단은 하지 않는다. 인용 후보에 머리말이 섞이지 않도록
-    SQLite content의 메타데이터 헤더는 v8의 기존 파서로 제외한다.
+def _candidate_quotes(source: dict) -> list[str]:
+    """법령 원문에서 조문 제목을 제외한 실질적인 인용 후보를 추출한다.
+
+    - 특정 법률이나 사건의 키워드를 사용하지 않는다.
+    - 독립된 조문 제목은 인용 후보에서 제외한다.
+    - 원문에 존재하는 연속 문자열만 반환한다.
+    - 적절한 본문이 없으면 빈 목록을 반환한다.
+    - 법령의 적용 가능성이나 법적 의미는 판단하지 않는다.
     """
     body = v8._law_body(source).strip()
     if not body:
         return []
 
+    # 법률 종류에 관계없이 독립된 조문 제목을 구별한다.
+    heading_pattern = re.compile(
+        r"^제\s*\d+\s*조(?:의\s*\d+)?"
+        r"\s*(?:\([^)]*\))?"
+        r"\s*(?:<[^>]*>)?$"
+    )
+
     candidates: list[str] = []
-    # 본문 줄과 첫 문장부터 시도해 '짧은 원문 발췌'가 되도록 한다.
+
     for line in body.splitlines():
         line = line.strip()
+
         if not line:
             continue
-        # 조문 전체가 아주 길더라도 문장 경계가 있는 부분까지 우선 채택.
-        first_sentence = re.split(r"(?<=[.!?。])\s+", line, maxsplit=1)[0].strip()
+
+        # 실질적인 내용 없이 조문 제목만 있는 줄은 제외한다.
+        if heading_pattern.fullmatch(line):
+            continue
+
+        first_sentence = re.split(
+            r"(?<=[.!?。])\s+",
+            line,
+            maxsplit=1,
+        )[0].strip()
+
         for text in (first_sentence, line):
-            if text and len(v8._compact(text)) >= 12:
-                candidates.append(text[:350].strip())
+            quote = text[:350].strip()
+
+            if 12 <= len(v8._compact(quote)) <= 400:
+                candidates.append(quote)
+
         if candidates:
             break
 
-    if not candidates and len(v8._compact(body)) >= 12:
-        candidates.append(body[:350].strip())
-    # 길이나 연속 인용 여부는 최종적으로 v8 validator에서 검사한다.
+    # 조문 제목밖에 없다면 복구 가능한 근거가 없는 것으로 처리한다.
     return list(dict.fromkeys(candidates))
 
 

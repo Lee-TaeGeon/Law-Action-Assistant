@@ -1,0 +1,118 @@
+
+{
+  "dataset_version": "0.1",
+  "description": "Law Action Assistant 범용 법률 답변 품질 평가",
+  "cases": [
+    {
+      "id": "LAW-001",
+      "category": [
+        "labor"
+      ],
+      "question": "회사에서 두 달째 월급을 받지 못했습니다. 어떤 증거를 모아야 하고 어디에 신고해야 하나요?",
+      "expected_intents": [
+        "evidence_collection",
+        "procedure"
+      ],
+      "required_checks": [
+        "근로관계 및 임금 지급 사실관계 확인",
+        "증거 확보 방법 안내",
+        "신고 절차 안내",
+        "추가 확인이 필요한 사실 구분"
+      ],
+      "verified_sources": [
+        {
+          "type": "statute",
+          "title": "근로기준법 제43조(임금 지급)",
+          "url": "https://law.go.kr/lsLinkCommonInfo.do?chrClsCd=010202&lsJoLnkSeq=1034323105",
+          "effective_date": "2026-10-08",
+          "supports": "임금의 직접·전액 지급 및 정기 지급 원칙"
+        },
+        {
+          "type": "official_procedure",
+          "title": "고용노동부 노동포털 임금체불 진정서",
+          "url": "https://labor.moel.go.kr/minwonApply/minwonFormat.do?searchRlm=1&searchVal=SN001",
+          "supports": "임금체불 진정 신청 방법 및 관할 기관"
+        }
+      ],
+      "review_status": "pending"
+    },
+    {
+      "id": "LAW-002",
+      "category": [
+        "civil",
+        "criminal"
+      ],
+      "question": "중고거래에서 돈을 보냈는데 판매자가 물건을 보내지 않았습니다. 사기죄가 성립하나요? 돈을 돌려받을 방법도 알려주세요.",
+      "expected_intents": [
+        "case_analysis",
+        "procedure"
+      ],
+      "required_checks": [
+        "형사상 쟁점과 민사상 쟁점 구분",
+        "사기 성립 여부를 단정하지 않기",
+        "피해금 회수 방법 검토",
+        "부족한 사실관계 확인"
+      ],
+      "verified_sources": [],
+      "review_status": "pending"
+    },
+    {
+      "id": "LAW-003",
+      "category": [
+        "housing",
+        "civil"
+      ],
+      "question": "전세계약이 끝났는데 집주인이 보증금을 돌려주지 않습니다. 어떤 법적 절차를 진행할 수 있나요?",
+      "expected_intents": [
+        "legal_explanation",
+        "procedure"
+      ],
+      "required_checks": [
+        "계약 종료 관련 사실 확인",
+        "보증금 반환 관련 법적 쟁점 검토",
+        "가능한 대응 절차 설명",
+        "절차별 요건과 주의사항 확인"
+      ],
+      "verified_sources": [],
+      "review_status": "pending"
+    },
+    {
+      "id": "LAW-004",
+      "category": [
+        "family"
+      ],
+      "question": "상대방이 약속한 양육비를 지급하지 않습니다. 어떤 방법으로 대응할 수 있나요?",
+      "expected_intents": [
+        "case_analysis",
+        "procedure"
+      ],
+      "required_checks": [
+        "양육비 지급 의무의 근거 확인",
+        "합의 또는 법원 결정 여부 확인",
+        "가능한 절차 및 적용 요건 검토",
+        "추가로 필요한 자료 확인"
+      ],
+      "verified_sources": [],
+      "review_status": "pending"
+    },
+    {
+      "id": "LAW-005",
+      "category": [
+        "administrative"
+      ],
+      "question": "행정기관으로부터 불이익 처분을 받았습니다. 이의신청이나 행정심판을 진행할 수 있나요?",
+      "expected_intents": [
+        "legal_explanation",
+        "procedure"
+      ],
+      "required_checks": [
+        "처분의 종류 및 통지일 확인",
+        "불복 절차의 적용 가능성 검토",
+        "관련 기간과 요건의 근거 확인",
+        "확인되지 않은 기한을 단정하지 않기"
+      ],
+      "verified_sources": [],
+      "review_status": "pending"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+
+{
+  "case_id": "LAW-001",
+  "system": "LangGraph v13",
+  "model": "qwen3:8b",
+  "baseline_commit": "6f2331a",
+  "answer_validation_status": "ok",
+  "generation": {
+    "citation_attempts_failed": 2,
+    "fallback_used": true
+  },
+  "retrieved_source_articles": [
+    "근로기준법 제43조의8",
+    "근로기준법 제44조의2",
+    "근로기준법 제43조"
+  ],
+  "displayed_source_articles": [
+    "근로기준법 제43조의8",
+    "근로기준법 제44조의2"
+  ],
+  "evaluation": {
+    "evidence_collection_answered": false,
+    "procedure_answered": false,
+    "substantive_legal_explanation": false,
+    "followup_questions_provided": true,
+    "citation_contains_substantive_provision": false,
+    "legal_accuracy_verified": false
+  },
+  "identified_problems": [
+    "LLM 법령 인용 생성 2회 실패",
+    "원문 복구 결과가 조문 제목 위주로 구성됨",
+    "사건 관련성이 불확실한 법령 선택",
+    "증거 확보 및 신고 절차 설명 누락",
+    "검증 상태 ok가 실제 답변 품질을 나타내지 못함"
+  ],
+  "review_status": "diagnostic"
+}

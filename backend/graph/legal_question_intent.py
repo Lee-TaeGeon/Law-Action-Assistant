@@ -93,4 +93,3 @@ def classify_question_intent(question: str) -> str:
 
     # 의도를 확정하기 어려운 질문
     return "other"
-
